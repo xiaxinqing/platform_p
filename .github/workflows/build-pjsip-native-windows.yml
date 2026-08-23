@@ -113,14 +113,6 @@ jobs:
           if (!$cryptoLibrary -or !$sslLibrary) {
             throw 'OpenSSL import libraries were not installed'
           }
-          $windowsKitsRoot = "${env:ProgramFiles(x86)}\Windows Kits\10"
-          $windowsSdk = Get-ChildItem "$windowsKitsRoot\Include" -Directory |
-            Where-Object { Test-Path (Join-Path $_.FullName 'um\audioclient.h') } |
-            Sort-Object Name -Descending |
-            Select-Object -First 1
-          if (!$windowsSdk) { throw 'Unable to locate a Windows SDK with WASAPI headers' }
-          $wasapiInclude = "$windowsKitsRoot\Include\$($windowsSdk.Name)\um"
-          $wasapiLib = "$windowsKitsRoot\Lib\$($windowsSdk.Name)\um\x64"
 
           cmake `
             -S $env:PJPROJECT_ROOT `
@@ -141,12 +133,8 @@ jobs:
             -DPJMEDIA_WITH_VIDEO=OFF `
             -DPJMEDIA_WITH_OPUS_CODEC=OFF `
             -DPJMEDIA_WITH_WEBRTC_AEC=OFF `
-            -DPJMEDIA_WITH_AUDIODEV_WASAPI=ON `
-            -DWASAPI_INCLUDE_DIR="$wasapiInclude" `
-            -DWASAPI_LIBRARY_KSUSER="$wasapiLib/ksuser.lib" `
-            -DWASAPI_LIBRARY_MFPLAT="$wasapiLib/mfplat.lib" `
-            -DWASAPI_LIBRARY_MFUUID="$wasapiLib/mfuuid.lib" `
-            -DWASAPI_LIBRARY_WMCODECDSPUUID="$wasapiLib/wmcodecdspuuid.lib" `
+            -DPJMEDIA_WITH_AUDIODEV_WASAPI=OFF `
+            -DPJMEDIA_WITH_AUDIODEV_WMME=ON `
             -DPJMEDIA_WITH_SRTP=ON `
             -DPJ_DEP_SRTP=bundled `
             -DSRTP_WITH_OPENSSL=ON
@@ -216,7 +204,7 @@ jobs:
           Runtime: MSVC /MD
           Libraries: static PJSIP/PJSUA2 and OpenSSL $env:OPENSSL_VERSION runtime DLLs
           SIP TLS: enabled with OpenSSL
-          Audio backend: WASAPI
+          Audio backend: Windows Multimedia Extensions (WMME)
           Compile-time log ceiling: 6
           Integration: link from the Windows Flutter native plugin, then expose MethodChannel/EventChannel APIs
           Dart FFI wrapper: not included
