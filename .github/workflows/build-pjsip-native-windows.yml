@@ -91,6 +91,10 @@ jobs:
           #define PJMEDIA_HAS_VIDEO        0
           #define PJ_LOG_MAX_LEVEL         6
           #define PJ_IOQUEUE_MAX_HANDLERS  256
+          #ifdef PJ_HAS_SSL_SOCK
+          #  undef PJ_HAS_SSL_SOCK
+          #endif
+          #define PJ_HAS_SSL_SOCK          1
           #define PJMEDIA_HAS_SRTP         1
           #define PJMEDIA_SRTP_HAS_DTLS    1
           '@ | Set-Content -Path $configPath -Encoding ascii
@@ -155,12 +159,25 @@ jobs:
           foreach ($library in $staticLibraries) {
             Copy-Item $library.FullName (Join-Path $pjsipLib $library.Name) -Force
           }
+          foreach ($requiredLibrary in @(
+            'pjlib.lib',
+            'pjmedia.lib',
+            'pjsip.lib',
+            'pjsua-lib.lib',
+            'pjsua2.lib',
+            'srtp.lib'
+          )) {
+            if (!(Test-Path (Join-Path $pjsipLib $requiredLibrary))) {
+              throw "Missing required PJSIP library: $requiredLibrary"
+            }
+          }
           $staticLibraries.Name | Sort-Object -Unique |
             Set-Content "$outputRoot\pjsip\libraries.txt"
 
-          New-Item -ItemType Directory -Force -Path "$outputRoot\openssl" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$outputRoot\openssl\lib" | Out-Null
           Copy-Item "$opensslRoot\include" "$outputRoot\openssl\include" -Recurse
-          Copy-Item "$opensslRoot\lib" "$outputRoot\openssl\lib" -Recurse
+          Copy-Item "$opensslRoot\lib\libcrypto.lib" "$outputRoot\openssl\lib\libcrypto.lib"
+          Copy-Item "$opensslRoot\lib\libssl.lib" "$outputRoot\openssl\lib\libssl.lib"
           Copy-Item "$env:PJPROJECT_ROOT\COPYING" "$outputRoot\COPYING-pjproject.txt"
           Copy-Item "${{ github.workspace }}\openssl-$env:OPENSSL_VERSION\LICENSE.txt" `
             "$outputRoot\LICENSE-OpenSSL.txt"
@@ -168,6 +185,8 @@ jobs:
           PJSIP native SDK for Windows x64
           Runtime: MSVC /MD
           Libraries: static PJSIP/PJSUA2 and static OpenSSL $env:OPENSSL_VERSION
+          SIP TLS: enabled with OpenSSL
+          Compile-time log ceiling: 6
           Integration: link from the Windows Flutter native plugin, then expose MethodChannel/EventChannel APIs
           Dart FFI wrapper: not included
           "@ | Set-Content "$outputRoot\BUILD-INFO.txt"

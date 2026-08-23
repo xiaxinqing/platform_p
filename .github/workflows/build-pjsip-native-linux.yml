@@ -73,6 +73,9 @@ jobs:
           #define PJMEDIA_HAS_VIDEO        0
           #define PJ_LOG_MAX_LEVEL         6
           #define PJ_IOQUEUE_MAX_HANDLERS  256
+          #ifdef PJ_HAS_SSL_SOCK
+          #  undef PJ_HAS_SSL_SOCK
+          #endif
           #define PJ_HAS_SSL_SOCK          1
           #define PJMEDIA_HAS_SRTP         1
           #define PJMEDIA_SRTP_HAS_DTLS    1
@@ -105,9 +108,24 @@ jobs:
             -DSRTP_WITH_OPENSSL=ON
           cmake --build "${build_root}" --target install --parallel
 
-          mkdir -p "${output_root}/openssl"
+          mkdir -p "${pjsip_prefix}/lib"
+          find "${pjsip_prefix}/bin" -type f -name '*.a' \
+            -exec cp {} "${pjsip_prefix}/lib/" \;
+          test -f "${pjsip_prefix}/lib/libpjsua2.a" || {
+            echo "Missing libpjsua2.a" >&2
+            exit 1
+          }
+          find "${pjsip_prefix}/lib" -maxdepth 1 -type f -name '*.a' \
+            -exec basename {} \; | sort > "${pjsip_prefix}/libraries.txt"
+          rm -rf \
+            "${pjsip_prefix}/bin" \
+            "${pjsip_prefix}/lib/cmake" \
+            "${pjsip_prefix}/lib/pkgconfig"
+
+          mkdir -p "${output_root}/openssl/lib"
           cp -R "${openssl_root}/include" "${output_root}/openssl/"
-          cp -R "${openssl_root}/lib" "${output_root}/openssl/"
+          cp "${openssl_root}/lib/libcrypto.a" "${output_root}/openssl/lib/"
+          cp "${openssl_root}/lib/libssl.a" "${output_root}/openssl/lib/"
           cp "${PJPROJECT_ROOT}/COPYING" "${output_root}/COPYING-pjproject.txt"
           cp "${GITHUB_WORKSPACE}/openssl-${OPENSSL_VERSION}/LICENSE.txt" \
             "${output_root}/LICENSE-OpenSSL.txt"
@@ -115,6 +133,7 @@ jobs:
           PJSIP native SDK for Linux x64
           Libraries: static PIC PJSIP/PJSUA2 and static OpenSSL ${OPENSSL_VERSION}
           Audio backend: ALSA
+          Compile-time log ceiling: 6
           Integration: link from the Linux Flutter native plugin, then expose MethodChannel/EventChannel APIs
           Dart FFI wrapper: not included
           EOF
