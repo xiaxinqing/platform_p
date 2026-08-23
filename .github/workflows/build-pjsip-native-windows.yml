@@ -1,0 +1,151 @@
+name: Build PJSIP Native SDK Windows x64
+
+env:
+  OPENSSL_VERSION: 3.5.7
+  OPENSSL_SHA256: a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-pjsip-native-windows.yml"
+      - "third_path/pjproject-2.17/**"
+      - "native/**"
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+        with:
+          vs-version: '[17.0,18.0)'
+          msbuild-architecture: x64
+
+      - name: Install NASM
+        shell: pwsh
+        run: |
+          choco install nasm -y --no-progress
+          $nasmPath = 'C:\Program Files\NASM'
+          if (!(Test-Path "$nasmPath\nasm.exe")) {
+            throw "nasm.exe was not installed at $nasmPath"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $nasmPath
+
+      - name: Prepare PJSIP source
+        shell: pwsh
+        run: |
+          $pjRoot = "${{ github.workspace }}\third_path\pjproject-2.17"
+          if (!(Test-Path "$pjRoot\CMakeLists.txt")) {
+            throw "Missing vendored PJSIP source: $pjRoot"
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "PJPROJECT_ROOT=$pjRoot"
+
+      - name: Build pinned static OpenSSL
+        shell: pwsh
+        run: |
+          $archive = "${{ github.workspace }}\openssl-$env:OPENSSL_VERSION.tar.gz"
+          Invoke-WebRequest `
+            -Uri "https://www.openssl.org/source/openssl-$env:OPENSSL_VERSION.tar.gz" `
+            -OutFile $archive
+          $actualHash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $env:OPENSSL_SHA256) {
+            throw "OpenSSL checksum mismatch: expected $env:OPENSSL_SHA256, got $actualHash"
+          }
+          tar -xzf $archive -C '${{ github.workspace }}'
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -version '[17.0,18.0)' -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vsPath) { throw 'Unable to locate Visual Studio 2022' }
+
+          $source = "${{ github.workspace }}\openssl-$env:OPENSSL_VERSION"
+          $prefix = "${{ github.workspace }}\deps\openssl"
+          $batchFile = "${{ github.workspace }}\build-openssl.cmd"
+          @(
+            '@echo off',
+            "call `"$vsPath\VC\Auxiliary\Build\vcvars64.bat`" || exit /b 1",
+            "cd /d `"$source`" || exit /b 1",
+            "perl Configure VC-WIN64A no-shared no-tests --prefix=`"$prefix`" --openssldir=`"$prefix\ssl`" || exit /b 1",
+            'nmake || exit /b 1',
+            'nmake install_sw install_ssldirs || exit /b 1'
+          ) | Set-Content -Path $batchFile -Encoding ascii
+          & cmd.exe /d /c $batchFile
+          if ($LASTEXITCODE -ne 0) { throw "OpenSSL build failed with exit code $LASTEXITCODE" }
+
+      - name: Configure PJSIP features
+        shell: pwsh
+        run: |
+          $configPath = Join-Path $env:PJPROJECT_ROOT 'pjlib\include\pj\config_site.h'
+          @'
+          #define PJSUA_MAX_CALLS          32
+          #define PJSUA_MAX_ACC            64
+          #define PJMEDIA_SOUND_CLOCK_RATE 44100
+          #define PJMEDIA_HAS_VIDEO        0
+          #define PJ_LOG_MAX_LEVEL         6
+          #define PJ_IOQUEUE_MAX_HANDLERS  256
+          #define PJ_HAS_SSL_SOCK          1
+          #define PJMEDIA_HAS_SRTP         1
+          #define PJMEDIA_SRTP_HAS_DTLS    1
+          '@ | Set-Content -Path $configPath -Encoding ascii
+
+      - name: Build and install native PJSIP SDK
+        shell: pwsh
+        run: |
+          $buildRoot = "${{ github.workspace }}\build\pjsip-windows-x64"
+          $outputRoot = "${{ github.workspace }}\output\windows-x64"
+          $pjsipPrefix = "$outputRoot\pjsip"
+          $opensslRoot = "${{ github.workspace }}\deps\openssl"
+
+          cmake `
+            -S $env:PJPROJECT_ROOT `
+            -B $buildRoot `
+            -G 'Visual Studio 17 2022' `
+            -A x64 `
+            -DCMAKE_INSTALL_PREFIX=$pjsipPrefix `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DBUILD_TESTING=OFF `
+            -DPJ_SKIP_EXPERIMENTAL_NOTICE=ON `
+            -DPJLIB_WITH_SSL=openssl `
+            -DOPENSSL_ROOT_DIR=$opensslRoot `
+            -DOPENSSL_USE_STATIC_LIBS=TRUE `
+            -DPJMEDIA_WITH_VIDEO=OFF `
+            -DPJMEDIA_WITH_OPUS_CODEC=OFF `
+            -DPJMEDIA_WITH_WEBRTC_AEC=OFF `
+            -DPJMEDIA_WITH_AUDIODEV_WASAPI=ON `
+            -DPJMEDIA_WITH_SRTP=ON `
+            -DPJ_DEP_SRTP=bundled `
+            -DSRTP_WITH_OPENSSL=ON
+          if ($LASTEXITCODE -ne 0) { throw 'PJSIP configure failed' }
+
+          cmake --build $buildRoot --config Release --target install --parallel
+          if ($LASTEXITCODE -ne 0) { throw 'PJSIP build failed' }
+
+          New-Item -ItemType Directory -Force -Path "$outputRoot\openssl" | Out-Null
+          Copy-Item "$opensslRoot\include" "$outputRoot\openssl\include" -Recurse
+          Copy-Item "$opensslRoot\lib" "$outputRoot\openssl\lib" -Recurse
+          Copy-Item "$env:PJPROJECT_ROOT\COPYING" "$outputRoot\COPYING-pjproject.txt"
+          Copy-Item "${{ github.workspace }}\openssl-$env:OPENSSL_VERSION\LICENSE.txt" `
+            "$outputRoot\LICENSE-OpenSSL.txt"
+          @"
+          PJSIP native SDK for Windows x64
+          Runtime: MSVC /MD
+          Libraries: static PJSIP/PJSUA2 and static OpenSSL $env:OPENSSL_VERSION
+          Integration: link from the Windows Flutter native plugin, then expose MethodChannel/EventChannel APIs
+          Dart FFI wrapper: not included
+          "@ | Set-Content "$outputRoot\BUILD-INFO.txt"
+
+      - name: Upload native SDK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pjsip-native-sdk-windows-x64
+          path: output/windows-x64/
+          if-no-files-found: error

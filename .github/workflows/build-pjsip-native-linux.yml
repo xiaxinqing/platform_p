@@ -1,0 +1,126 @@
+name: Build PJSIP Native SDK Linux x64
+
+env:
+  OPENSSL_VERSION: 3.5.7
+  OPENSSL_SHA256: a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-pjsip-native-linux.yml"
+      - "third_path/pjproject-2.17/**"
+      - "native/**"
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            perl \
+            nasm \
+            pkg-config \
+            libasound2-dev
+
+      - name: Prepare PJSIP source
+        run: |
+          set -euo pipefail
+          pj_root="${GITHUB_WORKSPACE}/third_path/pjproject-2.17"
+          test -f "${pj_root}/CMakeLists.txt" || {
+            echo "Missing vendored PJSIP source: ${pj_root}" >&2
+            exit 1
+          }
+          echo "PJPROJECT_ROOT=${pj_root}" >> "${GITHUB_ENV}"
+
+      - name: Build pinned static OpenSSL
+        run: |
+          set -euo pipefail
+          archive="${GITHUB_WORKSPACE}/openssl-${OPENSSL_VERSION}.tar.gz"
+          curl -fL "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz" \
+            -o "${archive}"
+          echo "${OPENSSL_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "${archive}" -C "${GITHUB_WORKSPACE}"
+
+          source_dir="${GITHUB_WORKSPACE}/openssl-${OPENSSL_VERSION}"
+          prefix="${GITHUB_WORKSPACE}/deps/openssl"
+          cd "${source_dir}"
+          CFLAGS="-fPIC" ./Configure linux-x86_64 no-shared no-tests \
+            --prefix="${prefix}" \
+            --openssldir="${prefix}/ssl"
+          make -j"$(nproc)"
+          make install_sw install_ssldirs
+
+      - name: Configure PJSIP features
+        run: |
+          cat > "${PJPROJECT_ROOT}/pjlib/include/pj/config_site.h" <<'EOF'
+          #define PJSUA_MAX_CALLS          32
+          #define PJSUA_MAX_ACC            64
+          #define PJMEDIA_SOUND_CLOCK_RATE 44100
+          #define PJMEDIA_HAS_VIDEO        0
+          #define PJ_LOG_MAX_LEVEL         6
+          #define PJ_IOQUEUE_MAX_HANDLERS  256
+          #define PJ_HAS_SSL_SOCK          1
+          #define PJMEDIA_HAS_SRTP         1
+          #define PJMEDIA_SRTP_HAS_DTLS    1
+          EOF
+
+      - name: Build and install native PJSIP SDK
+        run: |
+          set -euo pipefail
+          build_root="${GITHUB_WORKSPACE}/build/pjsip-linux-x64"
+          output_root="${GITHUB_WORKSPACE}/output/linux-x64"
+          pjsip_prefix="${output_root}/pjsip"
+          openssl_root="${GITHUB_WORKSPACE}/deps/openssl"
+
+          cmake -S "${PJPROJECT_ROOT}" -B "${build_root}" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${pjsip_prefix}" \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_TESTING=OFF \
+            -DPJ_SKIP_EXPERIMENTAL_NOTICE=ON \
+            -DPJLIB_WITH_SSL=openssl \
+            -DOPENSSL_ROOT_DIR="${openssl_root}" \
+            -DOPENSSL_USE_STATIC_LIBS=TRUE \
+            -DPJMEDIA_WITH_VIDEO=OFF \
+            -DPJMEDIA_WITH_OPUS_CODEC=OFF \
+            -DPJMEDIA_WITH_WEBRTC_AEC=OFF \
+            -DPJMEDIA_WITH_AUDIODEV_ALSA=ON \
+            -DPJMEDIA_WITH_SRTP=ON \
+            -DPJ_DEP_SRTP=bundled \
+            -DSRTP_WITH_OPENSSL=ON
+          cmake --build "${build_root}" --target install --parallel
+
+          mkdir -p "${output_root}/openssl"
+          cp -R "${openssl_root}/include" "${output_root}/openssl/"
+          cp -R "${openssl_root}/lib" "${output_root}/openssl/"
+          cp "${PJPROJECT_ROOT}/COPYING" "${output_root}/COPYING-pjproject.txt"
+          cp "${GITHUB_WORKSPACE}/openssl-${OPENSSL_VERSION}/LICENSE.txt" \
+            "${output_root}/LICENSE-OpenSSL.txt"
+          cat > "${output_root}/BUILD-INFO.txt" <<EOF
+          PJSIP native SDK for Linux x64
+          Libraries: static PIC PJSIP/PJSUA2 and static OpenSSL ${OPENSSL_VERSION}
+          Audio backend: ALSA
+          Integration: link from the Linux Flutter native plugin, then expose MethodChannel/EventChannel APIs
+          Dart FFI wrapper: not included
+          EOF
+
+      - name: Upload native SDK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pjsip-native-sdk-linux-x64
+          path: output/linux-x64/
+          if-no-files-found: error

@@ -1,0 +1,128 @@
+name: Build PJSIP Native SDK macOS
+
+env:
+  OPENSSL_VERSION: 3.5.7
+  OPENSSL_SHA256: a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8
+  MACOS_DEPLOYMENT_TARGET: "10.13"
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-pjsip-native-macos.yml"
+      - "third_path/pjproject-2.17/**"
+      - "native/**"
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: brew install cmake ninja nasm
+
+      - name: Prepare PJSIP source
+        run: |
+          set -euo pipefail
+          pj_root="${GITHUB_WORKSPACE}/third_path/pjproject-2.17"
+          test -f "${pj_root}/CMakeLists.txt" || {
+            echo "Missing vendored PJSIP source: ${pj_root}" >&2
+            exit 1
+          }
+          echo "PJPROJECT_ROOT=${pj_root}" >> "${GITHUB_ENV}"
+
+      - name: Configure PJSIP features
+        run: |
+          cat > "${PJPROJECT_ROOT}/pjlib/include/pj/config_site.h" <<'EOF'
+          #define PJSUA_MAX_CALLS          32
+          #define PJSUA_MAX_ACC            64
+          #define PJMEDIA_SOUND_CLOCK_RATE 44100
+          #define PJMEDIA_HAS_VIDEO        0
+          #define PJ_LOG_MAX_LEVEL         6
+          #define PJ_IOQUEUE_MAX_HANDLERS  256
+          #define PJ_HAS_SSL_SOCK          1
+          #define PJMEDIA_HAS_SRTP         1
+          #define PJMEDIA_SRTP_HAS_DTLS    1
+          EOF
+
+      - name: Build native SDK for arm64 and x86_64
+        run: |
+          set -euo pipefail
+          source_root="${GITHUB_WORKSPACE}/deps/src"
+          output_root="${GITHUB_WORKSPACE}/output/macos"
+          archive="${source_root}/openssl-${OPENSSL_VERSION}.tar.gz"
+          mkdir -p "${source_root}" "${output_root}"
+
+          curl -fL "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz" \
+            -o "${archive}"
+          echo "${OPENSSL_SHA256}  ${archive}" | shasum -a 256 -c -
+          tar -xzf "${archive}" -C "${source_root}"
+
+          build_arch() {
+            arch="$1"
+            openssl_target="$2"
+            openssl_source="${source_root}/openssl-${OPENSSL_VERSION}-${arch}"
+            openssl_prefix="${GITHUB_WORKSPACE}/deps/openssl-${arch}"
+            build_root="${GITHUB_WORKSPACE}/build/pjsip-macos-${arch}"
+            install_root="${output_root}/${arch}/pjsip"
+
+            cp -R "${source_root}/openssl-${OPENSSL_VERSION}" "${openssl_source}"
+            cd "${openssl_source}"
+            CFLAGS="-arch ${arch} -mmacosx-version-min=${MACOS_DEPLOYMENT_TARGET}" \
+              ./Configure "${openssl_target}" no-shared no-tests \
+                --prefix="${openssl_prefix}" \
+                --openssldir="${openssl_prefix}/ssl"
+            make -j"$(sysctl -n hw.ncpu)"
+            make install_sw install_ssldirs
+
+            cmake -S "${PJPROJECT_ROOT}" -B "${build_root}" -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_OSX_ARCHITECTURES="${arch}" \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET="${MACOS_DEPLOYMENT_TARGET}" \
+              -DCMAKE_INSTALL_PREFIX="${install_root}" \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DBUILD_TESTING=OFF \
+              -DPJ_SKIP_EXPERIMENTAL_NOTICE=ON \
+              -DPJLIB_WITH_SSL=openssl \
+              -DOPENSSL_ROOT_DIR="${openssl_prefix}" \
+              -DOPENSSL_USE_STATIC_LIBS=TRUE \
+              -DPJMEDIA_WITH_VIDEO=OFF \
+              -DPJMEDIA_WITH_OPUS_CODEC=OFF \
+              -DPJMEDIA_WITH_WEBRTC_AEC=OFF \
+              -DPJMEDIA_WITH_AUDIODEV_COREAUDIO=ON \
+              -DPJMEDIA_WITH_SRTP=ON \
+              -DPJ_DEP_SRTP=bundled \
+              -DSRTP_WITH_OPENSSL=ON
+            cmake --build "${build_root}" --target install --parallel
+
+            mkdir -p "${output_root}/${arch}/openssl"
+            cp -R "${openssl_prefix}/include" "${output_root}/${arch}/openssl/"
+            cp -R "${openssl_prefix}/lib" "${output_root}/${arch}/openssl/"
+            cp "${PJPROJECT_ROOT}/COPYING" "${output_root}/${arch}/COPYING-pjproject.txt"
+            cp "${openssl_source}/LICENSE.txt" "${output_root}/${arch}/LICENSE-OpenSSL.txt"
+          }
+
+          build_arch arm64 darwin64-arm64-cc
+          build_arch x86_64 darwin64-x86_64-cc
+
+          cat > "${output_root}/BUILD-INFO.txt" <<EOF
+          PJSIP native SDK for macOS
+          Architectures: arm64, x86_64
+          Deployment target: macOS ${MACOS_DEPLOYMENT_TARGET}
+          Libraries: static PJSIP/PJSUA2 and static OpenSSL ${OPENSSL_VERSION}
+          Integration: link from the macOS Flutter native plugin, then expose MethodChannel/EventChannel APIs
+          Dart FFI wrapper: not included
+          EOF
+
+      - name: Upload native SDK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pjsip-native-sdk-macos
+          path: output/macos/
+          if-no-files-found: error
