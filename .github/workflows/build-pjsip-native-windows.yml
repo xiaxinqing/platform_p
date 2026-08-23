@@ -91,7 +91,6 @@ jobs:
           #define PJMEDIA_HAS_VIDEO        0
           #define PJ_LOG_MAX_LEVEL         6
           #define PJ_IOQUEUE_MAX_HANDLERS  256
-          #define PJ_HAS_SSL_SOCK          1
           #define PJMEDIA_HAS_SRTP         1
           #define PJMEDIA_SRTP_HAS_DTLS    1
           '@ | Set-Content -Path $configPath -Encoding ascii
@@ -126,8 +125,38 @@ jobs:
             -DSRTP_WITH_OPENSSL=ON
           if ($LASTEXITCODE -ne 0) { throw 'PJSIP configure failed' }
 
-          cmake --build $buildRoot --config Release --target install --parallel
+          cmake --build $buildRoot --config Release --target pjsua2 --parallel
           if ($LASTEXITCODE -ne 0) { throw 'PJSIP build failed' }
+
+          $pjsipInclude = "$outputRoot\pjsip\include"
+          $pjsipLib = "$outputRoot\pjsip\lib"
+          New-Item -ItemType Directory -Force -Path $pjsipInclude, $pjsipLib | Out-Null
+
+          foreach ($component in @('pjlib', 'pjlib-util', 'pjnath', 'pjmedia', 'pjsip')) {
+            Copy-Item "$env:PJPROJECT_ROOT\$component\include\*" `
+              $pjsipInclude -Recurse -Force
+          }
+          foreach ($generatedInclude in @(
+            "$buildRoot\pjlib\include",
+            "$buildRoot\pjlib-util\include",
+            "$buildRoot\pjmedia\include",
+            "$buildRoot\pjsip\include"
+          )) {
+            if (Test-Path $generatedInclude) {
+              Copy-Item "$generatedInclude\*" $pjsipInclude -Recurse -Force
+            }
+          }
+
+          $staticLibraries = @(Get-ChildItem -Path $buildRoot -Filter '*.lib' -Recurse |
+            Where-Object { $_.FullName -match '[\\/]Release[\\/]' })
+          if ($staticLibraries.Count -eq 0) {
+            throw 'No PJSIP static libraries were generated'
+          }
+          foreach ($library in $staticLibraries) {
+            Copy-Item $library.FullName (Join-Path $pjsipLib $library.Name) -Force
+          }
+          $staticLibraries.Name | Sort-Object -Unique |
+            Set-Content "$outputRoot\pjsip\libraries.txt"
 
           New-Item -ItemType Directory -Force -Path "$outputRoot\openssl" | Out-Null
           Copy-Item "$opensslRoot\include" "$outputRoot\openssl\include" -Recurse

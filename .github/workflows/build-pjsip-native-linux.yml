@@ -59,6 +59,7 @@ jobs:
           cd "${source_dir}"
           CFLAGS="-fPIC" ./Configure linux-x86_64 no-shared no-tests \
             --prefix="${prefix}" \
+            --libdir=lib \
             --openssldir="${prefix}/ssl"
           make -j"$(nproc)"
           make install_sw install_ssldirs
