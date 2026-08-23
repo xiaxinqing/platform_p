@@ -119,6 +119,9 @@ jobs:
             -DPJ_SKIP_EXPERIMENTAL_NOTICE=ON `
             -DPJLIB_WITH_SSL=openssl `
             -DOPENSSL_ROOT_DIR=$opensslRoot `
+            -DOPENSSL_INCLUDE_DIR="$opensslRoot/include" `
+            -DOPENSSL_CRYPTO_LIBRARY="$opensslRoot/lib/libcrypto.lib" `
+            -DOPENSSL_SSL_LIBRARY="$opensslRoot/lib/libssl.lib" `
             -DOPENSSL_USE_STATIC_LIBS=TRUE `
             -DPJMEDIA_WITH_VIDEO=OFF `
             -DPJMEDIA_WITH_OPUS_CODEC=OFF `
@@ -128,6 +131,10 @@ jobs:
             -DPJ_DEP_SRTP=bundled `
             -DSRTP_WITH_OPENSSL=ON
           if ($LASTEXITCODE -ne 0) { throw 'PJSIP configure failed' }
+          $osAutoPath = Join-Path $buildRoot 'pjlib\include\pj\compat\os_auto.h'
+          if (!(Select-String -Path $osAutoPath -Pattern '^#define PJ_HAS_SSL_SOCK 1$' -Quiet)) {
+            throw 'PJSIP configure did not enable SSL socket support'
+          }
 
           cmake --build $buildRoot --config Release --target pjsua2 --parallel
           if ($LASTEXITCODE -ne 0) { throw 'PJSIP build failed' }
