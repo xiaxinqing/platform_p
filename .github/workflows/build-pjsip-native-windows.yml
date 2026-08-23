@@ -106,6 +106,13 @@ jobs:
           $outputRoot = "${{ github.workspace }}\output\windows-x64"
           $pjsipPrefix = "$outputRoot\pjsip"
           $opensslRoot = "${{ github.workspace }}\deps\openssl"
+          $cryptoLibrary = Get-ChildItem $opensslRoot -Filter 'libcrypto*.lib' -Recurse |
+            Select-Object -First 1
+          $sslLibrary = Get-ChildItem $opensslRoot -Filter 'libssl*.lib' -Recurse |
+            Select-Object -First 1
+          if (!$cryptoLibrary -or !$sslLibrary) {
+            throw 'OpenSSL import libraries were not installed'
+          }
           $windowsKitsRoot = "${env:ProgramFiles(x86)}\Windows Kits\10"
           $windowsSdk = Get-ChildItem "$windowsKitsRoot\Include" -Directory |
             Where-Object { Test-Path (Join-Path $_.FullName 'um\audioclient.h') } |
@@ -128,8 +135,8 @@ jobs:
             -DPJLIB_WITH_SSL=openssl `
             -DOPENSSL_ROOT_DIR=$opensslRoot `
             -DOPENSSL_INCLUDE_DIR="$opensslRoot/include" `
-            -DOPENSSL_CRYPTO_LIBRARY="$opensslRoot/lib/libcrypto.lib" `
-            -DOPENSSL_SSL_LIBRARY="$opensslRoot/lib/libssl.lib" `
+            -DLIB_EAY_RELEASE="$($cryptoLibrary.FullName)" `
+            -DSSL_EAY_RELEASE="$($sslLibrary.FullName)" `
             -DOPENSSL_USE_STATIC_LIBS=FALSE `
             -DPJMEDIA_WITH_VIDEO=OFF `
             -DPJMEDIA_WITH_OPUS_CODEC=OFF `
@@ -197,8 +204,8 @@ jobs:
           New-Item -ItemType Directory -Force `
             -Path "$outputRoot\openssl\lib", "$outputRoot\openssl\bin" | Out-Null
           Copy-Item "$opensslRoot\include" "$outputRoot\openssl\include" -Recurse
-          Copy-Item "$opensslRoot\lib\libcrypto.lib" "$outputRoot\openssl\lib\libcrypto.lib"
-          Copy-Item "$opensslRoot\lib\libssl.lib" "$outputRoot\openssl\lib\libssl.lib"
+          Copy-Item $cryptoLibrary.FullName "$outputRoot\openssl\lib\$($cryptoLibrary.Name)"
+          Copy-Item $sslLibrary.FullName "$outputRoot\openssl\lib\$($sslLibrary.Name)"
           Copy-Item "$opensslRoot\bin\libcrypto-*.dll" "$outputRoot\openssl\bin\"
           Copy-Item "$opensslRoot\bin\libssl-*.dll" "$outputRoot\openssl\bin\"
           Copy-Item "$env:PJPROJECT_ROOT\COPYING" "$outputRoot\COPYING-pjproject.txt"
