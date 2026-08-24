@@ -1,0 +1,7 @@
+PJSIP native SDK for macOS
+Architectures: arm64, x86_64
+Deployment target: macOS 10.13
+Libraries: static PJSIP/PJSUA2 and static OpenSSL 3.5.7
+Compile-time log ceiling: 6
+Integration: link from the macOS Flutter native plugin, then expose MethodChannel/EventChannel APIs
+Dart FFI wrapper: not included

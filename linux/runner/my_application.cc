@@ -5,11 +5,71 @@
 #include <gdk/gdkx.h>
 #endif
 
+#include "../../native/pjsip_service.h"
 #include "flutter/generated_plugin_registrant.h"
+
+namespace {
+
+constexpr char kPjsipChannelName[] = "platform_p/pjsip";
+
+FlValue* pjsip_result_value(const platform_p::PjsipResult& result) {
+  FlValue* value = fl_value_new_map();
+  fl_value_set_string_take(value, "success",
+                           fl_value_new_bool(result.success));
+  fl_value_set_string_take(value, "state",
+                           fl_value_new_string(result.state.c_str()));
+  fl_value_set_string_take(value, "status",
+                           fl_value_new_int(result.status));
+  fl_value_set_string_take(value, "message",
+                           fl_value_new_string(result.message.c_str()));
+  return value;
+}
+
+FlValue* pjsip_event_value(const platform_p::PjsipEvent& event) {
+  FlValue* value = fl_value_new_map();
+  fl_value_set_string_take(value, "type",
+                           fl_value_new_string(event.type.c_str()));
+  fl_value_set_string_take(value, "state",
+                           fl_value_new_string(event.state.c_str()));
+  fl_value_set_string_take(value, "level",
+                           fl_value_new_int(event.level));
+  fl_value_set_string_take(value, "message",
+                           fl_value_new_string(event.message.c_str()));
+  return value;
+}
+
+struct PjsipNotification {
+  FlMethodChannel* channel;
+  platform_p::PjsipEvent event;
+};
+
+gboolean invoke_pjsip_event(gpointer user_data) {
+  auto* notification = static_cast<PjsipNotification*>(user_data);
+  g_autoptr(FlValue) value = pjsip_event_value(notification->event);
+  fl_method_channel_invoke_method(notification->channel, "event", value,
+                                  nullptr, nullptr, nullptr);
+  g_object_unref(notification->channel);
+  delete notification;
+  return G_SOURCE_REMOVE;
+}
+
+void notify_pjsip_event(FlMethodChannel* channel,
+                        const platform_p::PjsipEvent& event) {
+  if (channel == nullptr) {
+    return;
+  }
+  auto* notification =
+      new PjsipNotification{FL_METHOD_CHANNEL(g_object_ref(channel)), event};
+  g_idle_add(invoke_pjsip_event, notification);
+}
+
+}  // namespace
 
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  FlMethodChannel* pjsip_channel;
+  platform_p::PjsipService* pjsip_service;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -17,6 +77,32 @@ G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+}
+
+static void pjsip_method_call_cb(FlMethodChannel*,
+                                 FlMethodCall* method_call,
+                                 gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  const gchar* method = fl_method_call_get_name(method_call);
+  platform_p::PjsipResult result;
+
+  if (g_strcmp0(method, "initialize") == 0) {
+    result = self->pjsip_service->Initialize();
+  } else if (g_strcmp0(method, "status") == 0) {
+    result = self->pjsip_service->GetStatus();
+  } else if (g_strcmp0(method, "shutdown") == 0) {
+    result = self->pjsip_service->Shutdown();
+  } else {
+    g_autoptr(FlMethodResponse) response =
+        FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+    fl_method_call_respond(method_call, response, nullptr);
+    return;
+  }
+
+  g_autoptr(FlValue) value = pjsip_result_value(result);
+  g_autoptr(FlMethodResponse) response =
+      FL_METHOD_RESPONSE(fl_method_success_response_new(value));
+  fl_method_call_respond(method_call, response, nullptr);
 }
 
 // Implements GApplication::activate.
@@ -75,6 +161,22 @@ static void my_application_activate(GApplication* application) {
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
 
+  FlPluginRegistrar* pjsip_registrar =
+      fl_plugin_registry_get_registrar_for_plugin(FL_PLUGIN_REGISTRY(view),
+                                                  "PlatformPPjsip");
+  g_autoptr(FlStandardMethodCodec) pjsip_codec =
+      fl_standard_method_codec_new();
+  self->pjsip_channel = fl_method_channel_new(
+      fl_plugin_registrar_get_messenger(pjsip_registrar),
+      kPjsipChannelName, FL_METHOD_CODEC(pjsip_codec));
+  self->pjsip_service = new platform_p::PjsipService();
+  self->pjsip_service->SetEventCallback(
+      [channel = self->pjsip_channel](const platform_p::PjsipEvent& event) {
+        notify_pjsip_event(channel, event);
+      });
+  fl_method_channel_set_method_call_handler(
+      self->pjsip_channel, pjsip_method_call_cb, self, nullptr);
+
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
 
@@ -110,9 +212,10 @@ static void my_application_startup(GApplication* application) {
 
 // Implements GApplication::shutdown.
 static void my_application_shutdown(GApplication* application) {
-  // MyApplication* self = MY_APPLICATION(object);
-
-  // Perform any actions required at application shutdown.
+  MyApplication* self = MY_APPLICATION(application);
+  if (self->pjsip_service != nullptr) {
+    self->pjsip_service->Shutdown();
+  }
 
   G_APPLICATION_CLASS(my_application_parent_class)->shutdown(application);
 }
@@ -120,6 +223,12 @@ static void my_application_shutdown(GApplication* application) {
 // Implements GObject::dispose.
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
+  if (self->pjsip_service != nullptr) {
+    self->pjsip_service->SetEventCallback(nullptr);
+    delete self->pjsip_service;
+    self->pjsip_service = nullptr;
+  }
+  g_clear_object(&self->pjsip_channel);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }

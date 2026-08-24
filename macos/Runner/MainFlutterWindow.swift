@@ -9,6 +9,7 @@ class MainFlutterWindow: NSWindow {
     self.setFrame(windowFrame, display: true)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+    RegisterPjsipBridge(flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
   }

@@ -1,0 +1,6 @@
+PJSIP native SDK for Linux x64
+Libraries: static PIC PJSIP/PJSUA2 and static OpenSSL 3.5.7
+Audio backend: ALSA
+Compile-time log ceiling: 6
+Integration: link from the Linux Flutter native plugin, then expose MethodChannel/EventChannel APIs
+Dart FFI wrapper: not included

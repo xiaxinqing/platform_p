@@ -1,0 +1,9 @@
+// PJSIP native SDK for the active macOS architecture.
+PJSIP_SDK_ROOT = $(PROJECT_DIR)/Frameworks/PJSIP/$(CURRENT_ARCH)
+
+HEADER_SEARCH_PATHS = $(inherited) "$(PJSIP_SDK_ROOT)/pjsip/include" "$(PJSIP_SDK_ROOT)/openssl/include"
+LIBRARY_SEARCH_PATHS = $(inherited) "$(PJSIP_SDK_ROOT)/pjsip/lib" "$(PJSIP_SDK_ROOT)/openssl/lib"
+GCC_PREPROCESSOR_DEFINITIONS = $(inherited) PJ_AUTOCONF=1
+SWIFT_OBJC_BRIDGING_HEADER = Runner/PjsipBridge.h
+
+OTHER_LDFLAGS = $(inherited) -lpjsua2 -lpjsua-lib -lpjsip-ua -lpjsip-simple -lpjsip -lpjmedia-codec -lpjmedia-audiodev -lpjmedia-videodev -lpjmedia -lpjnath -lpjlib-util -lpjlib -lg7221 -lgsm -lilbc -lresample -lspeex -lsrtp -lssl -lcrypto -framework AudioToolbox -framework AVFoundation -framework CoreAudio -framework CoreMedia -framework Security -framework Foundation -framework AppKit

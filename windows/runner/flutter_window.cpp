@@ -1,8 +1,44 @@
 #include "flutter_window.h"
 
+#include <flutter/standard_method_codec.h>
+
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
+
+namespace {
+
+constexpr UINT kPjsipEventMessage = WM_APP + 0x51;
+
+flutter::EncodableValue PjsipResultValue(
+    const platform_p::PjsipResult& result) {
+  return flutter::EncodableMap{
+      {flutter::EncodableValue("success"),
+       flutter::EncodableValue(result.success)},
+      {flutter::EncodableValue("state"),
+       flutter::EncodableValue(result.state)},
+      {flutter::EncodableValue("status"),
+       flutter::EncodableValue(result.status)},
+      {flutter::EncodableValue("message"),
+       flutter::EncodableValue(result.message)},
+  };
+}
+
+flutter::EncodableValue PjsipEventValue(
+    const platform_p::PjsipEvent& event) {
+  return flutter::EncodableMap{
+      {flutter::EncodableValue("type"),
+       flutter::EncodableValue(event.type)},
+      {flutter::EncodableValue("state"),
+       flutter::EncodableValue(event.state)},
+      {flutter::EncodableValue("level"),
+       flutter::EncodableValue(event.level)},
+      {flutter::EncodableValue("message"),
+       flutter::EncodableValue(event.message)},
+  };
+}
+
+}  // namespace
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -25,6 +61,7 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  ConfigurePjsipChannel();
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -40,6 +77,14 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  if (pjsip_service_) {
+    pjsip_service_->Shutdown();
+    FlushPjsipEvents();
+    pjsip_service_->SetEventCallback(nullptr);
+    pjsip_service_.reset();
+  }
+  pjsip_channel_.reset();
+
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -62,10 +107,69 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
+    case kPjsipEventMessage:
+      FlushPjsipEvents();
+      return 0;
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
+}
+
+void FlutterWindow::ConfigurePjsipChannel() {
+  pjsip_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "platform_p/pjsip",
+          &flutter::StandardMethodCodec::GetInstance());
+  pjsip_service_ = std::make_unique<platform_p::PjsipService>();
+  pjsip_service_->SetEventCallback(
+      [this](const platform_p::PjsipEvent& event) {
+        EnqueuePjsipEvent(event);
+      });
+
+  pjsip_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        if (call.method_name() == "initialize") {
+          result->Success(PjsipResultValue(pjsip_service_->Initialize()));
+          return;
+        }
+        if (call.method_name() == "status") {
+          result->Success(PjsipResultValue(pjsip_service_->GetStatus()));
+          return;
+        }
+        if (call.method_name() == "shutdown") {
+          result->Success(PjsipResultValue(pjsip_service_->Shutdown()));
+          return;
+        }
+        result->NotImplemented();
+      });
+}
+
+void FlutterWindow::EnqueuePjsipEvent(
+    const platform_p::PjsipEvent& event) {
+  {
+    std::lock_guard<std::mutex> lock(pjsip_event_mutex_);
+    pending_pjsip_events_.push_back(event);
+  }
+  PostMessage(GetHandle(), kPjsipEventMessage, 0, 0);
+}
+
+void FlutterWindow::FlushPjsipEvents() {
+  std::vector<platform_p::PjsipEvent> events;
+  {
+    std::lock_guard<std::mutex> lock(pjsip_event_mutex_);
+    events.swap(pending_pjsip_events_);
+  }
+  if (!pjsip_channel_) {
+    return;
+  }
+  for (const auto& event : events) {
+    pjsip_channel_->InvokeMethod(
+        "event", std::make_unique<flutter::EncodableValue>(
+                     PjsipEventValue(event)));
+  }
 }

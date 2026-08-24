@@ -1,0 +1,8 @@
+PJSIP native SDK for Windows x64
+Runtime: MSVC /MD
+Libraries: static PJSIP/PJSUA2 and OpenSSL 3.5.7 runtime DLLs
+SIP TLS: enabled with OpenSSL
+Audio backend: Windows Multimedia Extensions (WMME)
+Compile-time log ceiling: 6
+Integration: link from the Windows Flutter native plugin, then expose MethodChannel/EventChannel APIs
+Dart FFI wrapper: not included
