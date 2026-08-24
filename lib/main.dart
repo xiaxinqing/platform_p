@@ -132,6 +132,12 @@ class _PjsipConsolePageState extends State<PjsipConsolePage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              Flexible(
+                flex: 3,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
               const Text('PJSIP NATIVE',
                   style: TextStyle(
                       fontWeight: FontWeight.w800,
@@ -180,6 +186,10 @@ class _PjsipConsolePageState extends State<PjsipConsolePage> {
               PjsipAccountPanel(bridge: bridge),
               const SizedBox(height: 12),
               PjsipCallPanel(bridge: bridge),
+                    ],
+                  ),
+                ),
+              ),
               const SizedBox(height: 18),
               Expanded(
                 child: Container(

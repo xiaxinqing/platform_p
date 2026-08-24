@@ -59,6 +59,19 @@ class PjsipOperationResult {
   final int callId;
 }
 
+enum PjsipMediaSecurity {
+  none('none', '普通 RTP'),
+  sdesSrtp('sdes_srtp', 'SDES-SRTP'),
+  dtlsSrtp('dtls_srtp', 'DTLS-SRTP'),
+  optionalDtlsFirst('optional_dtls_first', '可选 SRTP，优先 DTLS'),
+  optionalSdesFirst('optional_sdes_first', '可选 SRTP，优先 SDES');
+
+  const PjsipMediaSecurity(this.value, this.label);
+
+  final String value;
+  final String label;
+}
+
 class PjsipAccountConfig {
   const PjsipAccountConfig({
     required this.username,
@@ -66,6 +79,13 @@ class PjsipAccountConfig {
     required this.host,
     this.authUsername = '',
     this.transport = 'udp',
+    this.port = 0,
+    this.mediaSecurity = PjsipMediaSecurity.none,
+    this.stunEnabled = false,
+    this.stunServer = '',
+    this.stunPort = 3478,
+    this.iceEnabled = false,
+    this.tlsVerifyServer = false,
   });
 
   final String username;
@@ -73,6 +93,13 @@ class PjsipAccountConfig {
   final String password;
   final String host;
   final String transport;
+  final int port;
+  final PjsipMediaSecurity mediaSecurity;
+  final bool stunEnabled;
+  final String stunServer;
+  final int stunPort;
+  final bool iceEnabled;
+  final bool tlsVerifyServer;
 
   Map<String, dynamic> toMap() {
     return <String, dynamic>{
@@ -81,6 +108,13 @@ class PjsipAccountConfig {
       'password': password,
       'host': host.trim(),
       'transport': transport,
+      'port': port,
+      'mediaSecurity': mediaSecurity.value,
+      'stunEnabled': stunEnabled,
+      'stunServer': stunServer.trim(),
+      'stunPort': stunPort,
+      'iceEnabled': iceEnabled,
+      'tlsVerifyServer': tlsVerifyServer,
     };
   }
 }
@@ -100,6 +134,7 @@ class PjsipRegistrationEvent {
     required this.registered,
     required this.message,
     required this.state,
+    required this.accountUri,
   });
 
   factory PjsipRegistrationEvent.fromMap(Map<String, dynamic> map) {
@@ -126,6 +161,7 @@ class PjsipRegistrationEvent {
       registered: registered,
       message: message,
       state: state,
+      accountUri: map['accountUri']?.toString() ?? '',
     );
   }
 
@@ -135,6 +171,7 @@ class PjsipRegistrationEvent {
   final bool registered;
   final String message;
   final PjsipRegistrationState state;
+  final String accountUri;
 }
 
 enum PjsipCallState {
@@ -220,6 +257,7 @@ class PjsipCallEvent {
       incoming &&
       (state == PjsipCallState.incoming || state == PjsipCallState.early);
   bool get isConnected => state == PjsipCallState.confirmed;
+  bool get isOnHold => mediaStatus == 2 || mediaStatus == 3;
 }
 
 class PjsipStatusEvent {
@@ -258,6 +296,35 @@ class PjsipLogEvent {
   final int level;
   final String message;
   final DateTime receivedAt;
+}
+
+class PjsipAudioLevels {
+  const PjsipAudioLevels({
+    required this.success,
+    required this.status,
+    required this.microphoneLevel,
+    required this.remoteLevel,
+  });
+
+  factory PjsipAudioLevels.fromMap(Map<String, dynamic> map) {
+    return PjsipAudioLevels(
+      success: map['success'] == true,
+      status: (map['status'] as num?)?.toInt() ?? -1,
+      microphoneLevel:
+          ((map['microphoneLevel'] as num?)?.toInt() ?? 0)
+              .clamp(0, 255)
+              .toInt(),
+      remoteLevel:
+          ((map['remoteLevel'] as num?)?.toInt() ?? 0)
+              .clamp(0, 255)
+              .toInt(),
+    );
+  }
+
+  final bool success;
+  final int status;
+  final int microphoneLevel;
+  final int remoteLevel;
 }
 
 class PjsipBridgeException implements Exception {

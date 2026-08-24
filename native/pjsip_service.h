@@ -5,6 +5,9 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 struct pjsip_event;
 struct pjsip_rx_data;
@@ -26,6 +29,7 @@ struct PjsipEvent {
   int last_status = 0;
   bool incoming = false;
   std::string remote_uri;
+  std::string account_uri;
 };
 
 struct PjsipResult {
@@ -43,6 +47,26 @@ struct PjsipAccountConfig {
   std::string password;
   std::string host;
   std::string transport = "udp";
+  int port = 0;
+  std::string media_security = "none";
+  bool stun_enabled = false;
+  std::string stun_server;
+  int stun_port = 3478;
+  bool ice_enabled = false;
+  bool tls_verify_server = false;
+};
+
+struct PjsipAccountRuntime {
+  std::string username;
+  std::string host;
+  std::string transport;
+  int port = 0;
+  std::string media_security;
+  bool stun_enabled = false;
+  std::string stun_server;
+  int stun_port = 3478;
+  bool ice_enabled = false;
+  bool tls_verify_server = false;
 };
 
 class PjsipService {
@@ -58,11 +82,23 @@ class PjsipService {
   PjsipResult Initialize();
   PjsipResult GetStatus() const;
   PjsipResult RegisterAccount(const PjsipAccountConfig& config);
-  PjsipResult UnregisterAccount();
-  PjsipResult MakeCall(const std::string& destination);
+  PjsipResult UnregisterAccount(int account_id);
+  PjsipResult MakeCall(const std::string& destination, int account_id);
   PjsipResult AnswerCall(int call_id);
   PjsipResult RejectCall(int call_id);
   PjsipResult HangupCall(int call_id);
+  PjsipResult HoldCall(int call_id);
+  PjsipResult ResumeCall(int call_id);
+  PjsipResult SetMicrophoneMuted(bool muted);
+  PjsipResult SetSpeakerMuted(bool muted);
+  PjsipResult SendDtmf(int call_id, const std::string& digits);
+  PjsipResult GetAudioLevels(int call_id,
+                              unsigned* microphone_level,
+                              unsigned* remote_level);
+  PjsipResult SetAutoHoldOnIncoming(bool enabled);
+  PjsipResult ConfigureAudioCues(const std::string& ringtone_path,
+                                 const std::string& ringback_path,
+                                 const std::string& hangup_path);
   PjsipResult Shutdown();
 
  private:
@@ -75,6 +111,15 @@ class PjsipService {
   static void CallMediaStateCallback(int call_id);
   PjsipResult Fail(const std::string& step, int status);
   void ConfigureCodecs();
+  void HoldOtherConfirmedCalls(int except_call_id);
+  void ConnectCallAudio(int call_id, bool connect);
+  void RefreshAudioCues();
+  void HandleCallAudioCueState(int call_id, int call_state);
+  void StartAudioCueLocked(const std::string& path,
+                           bool loop,
+                           int* player_id);
+  void StopAudioCueLocked(int* player_id);
+  void StopAllAudioCues();
   void Emit(const PjsipEvent& event) const;
   void EmitLog(int level, const std::string& message) const;
   void EmitStatus(const std::string& state, const std::string& message) const;
@@ -88,15 +133,26 @@ class PjsipService {
   static std::atomic<PjsipService*> active_service_;
   mutable std::mutex lifecycle_mutex_;
   mutable std::mutex callback_mutex_;
+  mutable std::mutex audio_cue_mutex_;
   EventCallback event_callback_;
   bool created_ = false;
   bool initialized_ = false;
   int udp_transport_id_ = -1;
   int tcp_transport_id_ = -1;
-  int account_id_ = -1;
-  std::atomic<int> active_call_id_{-1};
-  std::string account_host_;
-  std::string account_transport_ = "udp";
+  int tls_transport_id_ = -1;
+  int tls_verified_transport_id_ = -1;
+  std::atomic<int> active_audio_call_id_{-1};
+  std::atomic<bool> auto_hold_on_incoming_{true};
+  std::string ringtone_path_;
+  std::string ringback_path_;
+  std::string hangup_path_;
+  int ringtone_player_id_ = -1;
+  int ringback_player_id_ = -1;
+  int hangup_player_id_ = -1;
+  std::unordered_set<int> connected_call_ids_;
+  std::unordered_set<int> hangup_played_call_ids_;
+  std::unordered_map<int, PjsipAccountRuntime> accounts_;
+  std::vector<std::string> stun_servers_;
 };
 
 }  // namespace platform_p

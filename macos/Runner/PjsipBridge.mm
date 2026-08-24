@@ -43,6 +43,7 @@ NSDictionary* EventDictionary(const platform_p::PjsipEvent& event) {
     @"lastStatus" : @(event.last_status),
     @"incoming" : @(event.incoming),
     @"remoteUri" : NativeString(event.remote_uri),
+    @"accountUri" : NativeString(event.account_uri),
   };
 }
 
@@ -60,6 +61,13 @@ int ArgumentInt(NSDictionary* arguments, NSString* key, int fallback = -1) {
   return [value isKindOfClass:[NSNumber class]]
              ? [static_cast<NSNumber*>(value) intValue]
              : fallback;
+}
+
+bool ArgumentBool(NSDictionary* arguments, NSString* key) {
+  id value = arguments[key];
+  return [value isKindOfClass:[NSNumber class]]
+             ? [static_cast<NSNumber*>(value) boolValue]
+             : false;
 }
 
 }  // namespace
@@ -100,14 +108,30 @@ void RegisterPjsipBridge(id<FlutterBinaryMessenger> messenger) {
       config.password = ArgumentString(arguments, @"password");
       config.host = ArgumentString(arguments, @"host");
       config.transport = ArgumentString(arguments, @"transport");
+      config.port = ArgumentInt(arguments, @"port", 0);
+      config.media_security = ArgumentString(arguments, @"mediaSecurity");
+      config.stun_enabled = ArgumentBool(arguments, @"stunEnabled");
+      config.stun_server = ArgumentString(arguments, @"stunServer");
+      config.stun_port = ArgumentInt(arguments, @"stunPort", 3478);
+      config.ice_enabled = ArgumentBool(arguments, @"iceEnabled");
+      config.tls_verify_server =
+          ArgumentBool(arguments, @"tlsVerifyServer");
       if (config.transport.empty()) {
         config.transport = "udp";
+      }
+      if (config.media_security.empty()) {
+        config.media_security = "none";
       }
       result(ResultDictionary(g_service->RegisterAccount(config)));
       return;
     }
     if ([call.method isEqualToString:@"unregisterAccount"]) {
-      result(ResultDictionary(g_service->UnregisterAccount()));
+      NSDictionary* arguments =
+          [call.arguments isKindOfClass:[NSDictionary class]]
+              ? static_cast<NSDictionary*>(call.arguments)
+              : @{};
+      result(ResultDictionary(
+          g_service->UnregisterAccount(ArgumentInt(arguments, @"accountId"))));
       return;
     }
     if ([call.method isEqualToString:@"makeCall"]) {
@@ -116,12 +140,15 @@ void RegisterPjsipBridge(id<FlutterBinaryMessenger> messenger) {
               ? static_cast<NSDictionary*>(call.arguments)
               : @{};
       result(ResultDictionary(
-          g_service->MakeCall(ArgumentString(arguments, @"destination"))));
+          g_service->MakeCall(ArgumentString(arguments, @"destination"),
+                              ArgumentInt(arguments, @"accountId"))));
       return;
     }
     if ([call.method isEqualToString:@"answerCall"] ||
         [call.method isEqualToString:@"rejectCall"] ||
-        [call.method isEqualToString:@"hangupCall"]) {
+        [call.method isEqualToString:@"hangupCall"] ||
+        [call.method isEqualToString:@"holdCall"] ||
+        [call.method isEqualToString:@"resumeCall"]) {
       NSDictionary* arguments =
           [call.arguments isKindOfClass:[NSDictionary class]]
               ? static_cast<NSDictionary*>(call.arguments)
@@ -131,9 +158,73 @@ void RegisterPjsipBridge(id<FlutterBinaryMessenger> messenger) {
         result(ResultDictionary(g_service->AnswerCall(call_id)));
       } else if ([call.method isEqualToString:@"rejectCall"]) {
         result(ResultDictionary(g_service->RejectCall(call_id)));
+      } else if ([call.method isEqualToString:@"holdCall"]) {
+        result(ResultDictionary(g_service->HoldCall(call_id)));
+      } else if ([call.method isEqualToString:@"resumeCall"]) {
+        result(ResultDictionary(g_service->ResumeCall(call_id)));
       } else {
         result(ResultDictionary(g_service->HangupCall(call_id)));
       }
+      return;
+    }
+    if ([call.method isEqualToString:@"setMicrophoneMuted"] ||
+        [call.method isEqualToString:@"setSpeakerMuted"]) {
+      NSDictionary* arguments =
+          [call.arguments isKindOfClass:[NSDictionary class]]
+              ? static_cast<NSDictionary*>(call.arguments)
+              : @{};
+      const bool muted = [arguments[@"muted"] boolValue];
+      result(ResultDictionary(
+          [call.method isEqualToString:@"setMicrophoneMuted"]
+              ? g_service->SetMicrophoneMuted(muted)
+              : g_service->SetSpeakerMuted(muted)));
+      return;
+    }
+    if ([call.method isEqualToString:@"sendDtmf"]) {
+      NSDictionary* arguments =
+          [call.arguments isKindOfClass:[NSDictionary class]]
+              ? static_cast<NSDictionary*>(call.arguments)
+              : @{};
+      result(ResultDictionary(g_service->SendDtmf(
+          ArgumentInt(arguments, @"callId"),
+          ArgumentString(arguments, @"digits"))));
+      return;
+    }
+    if ([call.method isEqualToString:@"getAudioLevels"]) {
+      NSDictionary* arguments =
+          [call.arguments isKindOfClass:[NSDictionary class]]
+              ? static_cast<NSDictionary*>(call.arguments)
+              : @{};
+      unsigned microphone_level = 0;
+      unsigned remote_level = 0;
+      const platform_p::PjsipResult native_result = g_service->GetAudioLevels(
+          ArgumentInt(arguments, @"callId"), &microphone_level,
+          &remote_level);
+      NSMutableDictionary* response =
+          [ResultDictionary(native_result) mutableCopy];
+      response[@"microphoneLevel"] = @(microphone_level);
+      response[@"remoteLevel"] = @(remote_level);
+      result(response);
+      return;
+    }
+    if ([call.method isEqualToString:@"setAutoHoldOnIncoming"]) {
+      NSDictionary* arguments =
+          [call.arguments isKindOfClass:[NSDictionary class]]
+              ? static_cast<NSDictionary*>(call.arguments)
+              : @{};
+      result(ResultDictionary(g_service->SetAutoHoldOnIncoming(
+          [arguments[@"enabled"] boolValue])));
+      return;
+    }
+    if ([call.method isEqualToString:@"configureAudioCues"]) {
+      NSDictionary* arguments =
+          [call.arguments isKindOfClass:[NSDictionary class]]
+              ? static_cast<NSDictionary*>(call.arguments)
+              : @{};
+      result(ResultDictionary(g_service->ConfigureAudioCues(
+          ArgumentString(arguments, @"ringtonePath"),
+          ArgumentString(arguments, @"ringbackPath"),
+          ArgumentString(arguments, @"hangupPath"))));
       return;
     }
     if ([call.method isEqualToString:@"shutdown"]) {
