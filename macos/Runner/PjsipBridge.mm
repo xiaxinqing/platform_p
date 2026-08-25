@@ -1,4 +1,5 @@
 #import "PjsipBridge.h"
+#import <CoreAudio/CoreAudio.h>
 
 #include "../../native/pjsip_service.h"
 
@@ -68,6 +69,120 @@ bool ArgumentBool(NSDictionary* arguments, NSString* key) {
   return [value isKindOfClass:[NSNumber class]]
              ? [static_cast<NSNumber*>(value) boolValue]
              : false;
+}
+
+dispatch_block_t g_pending_audio_device_refresh = nil;
+bool g_audio_device_monitoring = false;
+AudioObjectID g_default_input_device = kAudioObjectUnknown;
+AudioObjectID g_default_output_device = kAudioObjectUnknown;
+
+AudioObjectPropertyAddress AudioDevicePropertyAddress(
+    AudioObjectPropertySelector selector) {
+  return {selector, kAudioObjectPropertyScopeGlobal,
+          kAudioObjectPropertyElementMain};
+}
+
+AudioObjectID DefaultAudioDevice(AudioObjectPropertySelector selector) {
+  AudioObjectPropertyAddress address = AudioDevicePropertyAddress(selector);
+  AudioObjectID device = kAudioObjectUnknown;
+  UInt32 size = sizeof(device);
+  const OSStatus status = AudioObjectGetPropertyData(
+      kAudioObjectSystemObject, &address, 0, nullptr, &size, &device);
+  return status == noErr ? device : kAudioObjectUnknown;
+}
+
+void ScheduleSystemAudioDeviceRefresh() {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!g_audio_device_monitoring) {
+      return;
+    }
+    if (g_pending_audio_device_refresh != nil) {
+      dispatch_block_cancel(g_pending_audio_device_refresh);
+    }
+    g_pending_audio_device_refresh = dispatch_block_create(
+        static_cast<dispatch_block_flags_t>(0), ^{
+      g_pending_audio_device_refresh = nil;
+      const AudioObjectID input_device = DefaultAudioDevice(
+          kAudioHardwarePropertyDefaultInputDevice);
+      const AudioObjectID output_device = DefaultAudioDevice(
+          kAudioHardwarePropertyDefaultOutputDevice);
+      if (input_device == g_default_input_device &&
+          output_device == g_default_output_device) {
+        return;
+      }
+      g_default_input_device = input_device;
+      g_default_output_device = output_device;
+      if (!g_service) {
+        return;
+      }
+      const platform_p::PjsipResult refresh_result =
+          g_service->RefreshSystemAudioDevices();
+      if (!refresh_result.success) {
+        NSLog(@"[PJSIP] Audio device refresh failed: %s",
+              refresh_result.message.c_str());
+      }
+    });
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC),
+        dispatch_get_main_queue(), g_pending_audio_device_refresh);
+  });
+}
+
+OSStatus SystemAudioDevicePropertyChanged(
+    AudioObjectID,
+    UInt32,
+    const AudioObjectPropertyAddress*,
+    void*) {
+  ScheduleSystemAudioDeviceRefresh();
+  return noErr;
+}
+
+void StartSystemAudioDeviceMonitoring() {
+  if (g_audio_device_monitoring) {
+    return;
+  }
+  const AudioObjectPropertySelector selectors[] = {
+      kAudioHardwarePropertyDefaultInputDevice,
+      kAudioHardwarePropertyDefaultOutputDevice,
+  };
+  for (const AudioObjectPropertySelector selector : selectors) {
+    AudioObjectPropertyAddress address = AudioDevicePropertyAddress(selector);
+    const OSStatus status = AudioObjectAddPropertyListener(
+        kAudioObjectSystemObject, &address, SystemAudioDevicePropertyChanged,
+        nullptr);
+    if (status != noErr) {
+      NSLog(@"[PJSIP] Unable to monitor CoreAudio property: %u (%d)",
+            selector, status);
+    }
+  }
+  g_default_input_device =
+      DefaultAudioDevice(kAudioHardwarePropertyDefaultInputDevice);
+  g_default_output_device =
+      DefaultAudioDevice(kAudioHardwarePropertyDefaultOutputDevice);
+  g_audio_device_monitoring = true;
+}
+
+void StopSystemAudioDeviceMonitoring() {
+  if (!g_audio_device_monitoring) {
+    return;
+  }
+  g_audio_device_monitoring = false;
+  if (g_pending_audio_device_refresh != nil) {
+    dispatch_block_cancel(g_pending_audio_device_refresh);
+    g_pending_audio_device_refresh = nil;
+  }
+  const AudioObjectPropertySelector selectors[] = {
+      kAudioHardwarePropertyDefaultInputDevice,
+      kAudioHardwarePropertyDefaultOutputDevice,
+  };
+  for (const AudioObjectPropertySelector selector : selectors) {
+    AudioObjectPropertyAddress address = AudioDevicePropertyAddress(selector);
+    AudioObjectRemovePropertyListener(
+        kAudioObjectSystemObject, &address, SystemAudioDevicePropertyChanged,
+        nullptr);
+  }
+  g_default_input_device = kAudioObjectUnknown;
+  g_default_output_device = kAudioObjectUnknown;
 }
 
 }  // namespace
@@ -233,9 +348,11 @@ void RegisterPjsipBridge(id<FlutterBinaryMessenger> messenger) {
     }
     result(FlutterMethodNotImplemented);
   }];
+  StartSystemAudioDeviceMonitoring();
 }
 
 void ShutdownPjsipBridge(void) {
+  StopSystemAudioDeviceMonitoring();
   if (g_service) {
     g_service->Shutdown();
     g_service->SetEventCallback(nullptr);

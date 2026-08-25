@@ -642,6 +642,55 @@ PjsipResult PjsipService::ConfigureAudioCues(
           "PJSIP call sounds configured"};
 }
 
+PjsipResult PjsipService::RefreshSystemAudioDevices() {
+  std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+  if (!initialized_) {
+    return {true, "idle", PJ_SUCCESS,
+            "Audio device change recorded while PJSIP is stopped"};
+  }
+
+  // PJSUA caches the logical default IDs (-1/-2). Calling set_snd_dev() with
+  // those IDs again is treated as "no changes", even when CoreAudio's actual
+  // default route changed. Close the current VPIO/audio unit first so the
+  // default devices are resolved again when it is reopened.
+  pjsua_set_no_snd_dev();
+
+  pj_status_t status = pjmedia_aud_dev_refresh();
+  if (status != PJ_SUCCESS) {
+    return {false, "started", status,
+            "Audio device refresh failed: " + StatusDescription(status)};
+  }
+  status = pjsua_set_snd_dev(PJMEDIA_AUD_DEFAULT_CAPTURE_DEV,
+                             PJMEDIA_AUD_DEFAULT_PLAYBACK_DEV);
+  if (status != PJ_SUCCESS) {
+    return {false, "started", status,
+            "System audio device switch failed: " +
+                StatusDescription(status)};
+  }
+
+  pjsua_call_id call_ids[PJSUA_MAX_CALLS];
+  unsigned count = PJSUA_MAX_CALLS;
+  if (pjsua_enum_calls(call_ids, &count) == PJ_SUCCESS) {
+    for (unsigned index = 0; index < count; ++index) {
+      const int call_id = call_ids[index];
+      pjsua_call_info info;
+      if (pjsua_call_get_info(call_id, &info) != PJ_SUCCESS ||
+          info.media_status != PJSUA_CALL_MEDIA_ACTIVE) {
+        continue;
+      }
+      const bool should_connect =
+          !auto_hold_on_incoming_.load() ||
+          active_audio_call_id_.load() == call_id;
+      ConnectCallAudio(call_id, false);
+      ConnectCallAudio(call_id, should_connect);
+    }
+  }
+  RefreshAudioCues();
+  EmitLog(3, "PJSIP audio devices switched to system defaults");
+  return {true, "started", PJ_SUCCESS,
+          "Audio devices now follow system defaults"};
+}
+
 PjsipResult PjsipService::Shutdown() {
   std::lock_guard<std::mutex> lock(lifecycle_mutex_);
   if (!created_) {

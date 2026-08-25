@@ -99,6 +99,7 @@ class PjsipService {
   PjsipResult ConfigureAudioCues(const std::string& ringtone_path,
                                  const std::string& ringback_path,
                                  const std::string& hangup_path);
+  PjsipResult RefreshSystemAudioDevices();
   PjsipResult Shutdown();
 
  private:
