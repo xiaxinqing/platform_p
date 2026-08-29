@@ -30,6 +30,8 @@ struct PjsipEvent {
   bool incoming = false;
   std::string remote_uri;
   std::string account_uri;
+  std::string capture_device;
+  std::string playback_device;
 };
 
 struct PjsipResult {
@@ -89,6 +91,7 @@ class PjsipService {
   PjsipResult HangupCall(int call_id);
   PjsipResult HoldCall(int call_id);
   PjsipResult ResumeCall(int call_id);
+  PjsipResult TransferCall(int call_id, const std::string& destination);
   PjsipResult SetMicrophoneMuted(bool muted);
   PjsipResult SetSpeakerMuted(bool muted);
   PjsipResult SendDtmf(int call_id, const std::string& digits);
@@ -100,6 +103,7 @@ class PjsipService {
                                  const std::string& ringback_path,
                                  const std::string& hangup_path);
   PjsipResult RefreshSystemAudioDevices();
+  PjsipResult HandleNetworkChange();
   PjsipResult Shutdown();
 
  private:

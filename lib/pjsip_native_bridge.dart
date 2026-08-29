@@ -42,6 +42,9 @@ class PjsipNativeBridge {
   PjsipCallEvent? _currentCall;
   final Map<int, PjsipCallEvent> _calls = <int, PjsipCallEvent>{};
   bool _autoHoldOnIncoming = true;
+  final StreamController<PjsipAudioDeviceState> _audioDeviceEvents =
+      StreamController<PjsipAudioDeviceState>.broadcast();
+  PjsipAudioDeviceState? _currentAudioDevice;
 
   Stream<PjsipStatusEvent> get statusStream => _statusEvents.stream;
   Stream<PjsipLogEvent> get logStream => _logEvents.stream;
@@ -59,6 +62,9 @@ class PjsipNativeBridge {
       Map<int, PjsipCallEvent>.unmodifiable(_calls);
   bool get autoHoldOnIncoming => _autoHoldOnIncoming;
   Future<void> get settingsReady => _settingsReady;
+  Stream<PjsipAudioDeviceState> get audioDeviceStream =>
+      _audioDeviceEvents.stream;
+  PjsipAudioDeviceState? get currentAudioDevice => _currentAudioDevice;
 
   Future<PjsipOperationResult> initialize() {
     return _enqueue(() async {
@@ -66,6 +72,7 @@ class PjsipNativeBridge {
       if (_currentState == PjsipLifecycleState.started) {
         await _syncAutoHoldSetting();
         await _syncAudioCuePaths();
+        await _refreshAudioDeviceState();
         return const PjsipOperationResult(
           success: true,
           state: PjsipLifecycleState.started,
@@ -83,6 +90,7 @@ class PjsipNativeBridge {
       if (result.success) {
         await _syncAutoHoldSetting();
         await _syncAudioCuePaths();
+        await _refreshAudioDeviceState();
       }
       return result;
     });
@@ -100,6 +108,7 @@ class PjsipNativeBridge {
         }
         await _syncAutoHoldSetting();
         await _syncAudioCuePaths();
+        await _refreshAudioDeviceState();
       }
       final result = await _invoke('registerAccount', config.toMap());
       if (result.success && result.accountId >= 0) {
@@ -166,6 +175,23 @@ class PjsipNativeBridge {
           <String, dynamic>{'callId': callId, 'digits': digits},
         ),
       );
+
+  Future<PjsipOperationResult> transferCall(
+    int callId,
+    String destination,
+  ) =>
+      _enqueue(
+        () => _invoke(
+          'transferCall',
+          <String, dynamic>{
+            'callId': callId,
+            'destination': destination.trim(),
+          },
+        ),
+      );
+
+  Future<PjsipOperationResult> handleNetworkChange() =>
+      _enqueue(() => _invoke('handleNetworkChange'));
 
   Future<PjsipAudioLevels> getAudioLevels(int callId) async {
     try {
@@ -239,6 +265,27 @@ class PjsipNativeBridge {
     } catch (error) {
       debugPrint('[Flutter][PJSIP] 配置通话提示音失败: $error');
     }
+  }
+
+  Future<void> _refreshAudioDeviceState() async {
+    try {
+      final map = await _channel.invokeMapMethod<String, dynamic>(
+        'getAudioDeviceState',
+      );
+      if (map == null) return;
+      _publishAudioDevice(
+        PjsipAudioDeviceState.fromMap(Map<String, dynamic>.from(map)),
+      );
+    } on PlatformException catch (error) {
+      debugPrint('[Flutter][PJSIP] 查询音频设备失败: ${error.message}');
+    } on MissingPluginException {
+      debugPrint('[Flutter][PJSIP] 当前平台尚未注册音频设备状态接口');
+    }
+  }
+
+  void _publishAudioDevice(PjsipAudioDeviceState event) {
+    _currentAudioDevice = event;
+    _audioDeviceEvents.add(event);
   }
 
   Future<Map<String, String>> _extractAudioCueAssets() async {
@@ -384,6 +431,9 @@ class PjsipNativeBridge {
           '[Flutter][PJSIP][CALL] id=${event.callId} '
           'state=${event.state.name} remote=${event.remoteUri}',
         );
+        return;
+      case 'audioDevice':
+        _publishAudioDevice(PjsipAudioDeviceState.fromMap(map));
         return;
       default:
         debugPrint('[Flutter][PJSIP] Unknown native event: ' + map.toString());

@@ -327,6 +327,37 @@ class PjsipAudioLevels {
   final int remoteLevel;
 }
 
+enum PjsipAudioDeviceStatus { ready, switching, error, unknown }
+
+class PjsipAudioDeviceState {
+  const PjsipAudioDeviceState({
+    required this.status,
+    required this.captureDevice,
+    required this.playbackDevice,
+    required this.message,
+  });
+
+  factory PjsipAudioDeviceState.fromMap(Map<String, dynamic> map) {
+    final state = map['state'] as String? ?? '';
+    return PjsipAudioDeviceState(
+      status: switch (state) {
+        'ready' => PjsipAudioDeviceStatus.ready,
+        'switching' => PjsipAudioDeviceStatus.switching,
+        'error' => PjsipAudioDeviceStatus.error,
+        _ => PjsipAudioDeviceStatus.unknown,
+      },
+      captureDevice: map['captureDevice'] as String? ?? '未知设备',
+      playbackDevice: map['playbackDevice'] as String? ?? '未知设备',
+      message: map['message'] as String? ?? '',
+    );
+  }
+
+  final PjsipAudioDeviceStatus status;
+  final String captureDevice;
+  final String playbackDevice;
+  final String message;
+}
+
 class PjsipBridgeException implements Exception {
   const PjsipBridgeException({
     required this.code,

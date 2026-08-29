@@ -232,6 +232,18 @@ class _PjsipCallPanelState extends State<PjsipCallPanel> {
     );
   }
 
+  Future<void> _showBlindTransfer(PjsipCallEvent call) async {
+    final destination = await showDialog<String>(
+      context: context,
+      builder: (context) => _BlindTransferDialog(remoteUri: call.remoteUri),
+    );
+    if (!mounted || destination == null) return;
+    await _control(
+      call.callId,
+      () => widget.bridge.transferCall(call.callId, destination),
+    );
+  }
+
   void _showCallSettings() {
     showDialog<void>(
       context: context,
@@ -503,6 +515,14 @@ class _PjsipCallPanelState extends State<PjsipCallPanel> {
                   onPressed: busy ? null : () => _showDtmfPad(call),
                   icon: const Icon(Icons.dialpad),
                   label: const Text('拨号键盘'),
+                ),
+              if (call.isConnected)
+                OutlinedButton.icon(
+                  onPressed: busy
+                      ? null
+                      : () => unawaited(_showBlindTransfer(call)),
+                  icon: const Icon(Icons.phone_forwarded),
+                  label: const Text('转接'),
                 ),
               if (call.isConnected && call.isOnHold)
                 FilledButton.tonalIcon(
@@ -795,6 +815,8 @@ class _CallSettingsDialog extends StatefulWidget {
 
 class _CallSettingsDialogState extends State<_CallSettingsDialog> {
   late bool autoHoldOnIncoming;
+  StreamSubscription<PjsipAudioDeviceState>? audioDeviceSubscription;
+  PjsipAudioDeviceState? audioDevice;
   bool loading = true;
   bool saving = false;
   String? message;
@@ -803,7 +825,17 @@ class _CallSettingsDialogState extends State<_CallSettingsDialog> {
   void initState() {
     super.initState();
     autoHoldOnIncoming = widget.bridge.autoHoldOnIncoming;
+    audioDevice = widget.bridge.currentAudioDevice;
+    audioDeviceSubscription = widget.bridge.audioDeviceStream.listen((event) {
+      if (mounted) setState(() => audioDevice = event);
+    });
     unawaited(_loadSetting());
+  }
+
+  @override
+  void dispose() {
+    audioDeviceSubscription?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadSetting() async {
@@ -850,12 +882,13 @@ class _CallSettingsDialogState extends State<_CallSettingsDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: const Color(0xffedf4f1),
+            Material(
+              color: const Color(0xffedf4f1),
+              shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xffc8d9d3)),
+                side: const BorderSide(color: Color(0xffc8d9d3)),
               ),
+              clipBehavior: Clip.antiAlias,
               child: SwitchListTile(
                 value: autoHoldOnIncoming,
                 onChanged: saving || loading
@@ -873,6 +906,8 @@ class _CallSettingsDialogState extends State<_CallSettingsDialog> {
                 ),
               ),
             ),
+            const SizedBox(height: 12),
+            _buildAudioDeviceCard(),
             if (saving || loading) ...[
               const SizedBox(height: 12),
               const LinearProgressIndicator(minHeight: 2),
@@ -895,6 +930,193 @@ class _CallSettingsDialogState extends State<_CallSettingsDialog> {
               ? null
               : () => Navigator.of(context).pop(),
           child: const Text('完成'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAudioDeviceCard() {
+    final device = audioDevice;
+    final switching = device?.status == PjsipAudioDeviceStatus.switching;
+    final failed = device?.status == PjsipAudioDeviceStatus.error;
+    final accent = failed
+        ? const Color(0xffb54708)
+        : switching
+            ? const Color(0xff315c70)
+            : const Color(0xff007a5e);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: accent.withValues(alpha: 0.25)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.headphones, size: 19, color: accent),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    '音频设备',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                const Text(
+                  '跟随系统',
+                  style: TextStyle(fontSize: 12, color: Color(0xff52635f)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _AudioDeviceRow(
+              icon: Icons.mic,
+              label: '输入设备',
+              value: device?.captureDevice ?? '等待音频引擎初始化',
+            ),
+            const SizedBox(height: 9),
+            _AudioDeviceRow(
+              icon: Icons.volume_up,
+              label: '输出设备',
+              value: device?.playbackDevice ?? '等待音频引擎初始化',
+            ),
+            if (device != null && device.message.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                device.message,
+                style: TextStyle(fontSize: 12, color: accent),
+              ),
+            ],
+            if (switching) ...[
+              const SizedBox(height: 10),
+              const LinearProgressIndicator(minHeight: 2),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AudioDeviceRow extends StatelessWidget {
+  const _AudioDeviceRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 17, color: const Color(0xff52635f)),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 68,
+          child: Text(label, style: const TextStyle(fontSize: 12)),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _BlindTransferDialog extends StatefulWidget {
+  const _BlindTransferDialog({required this.remoteUri});
+
+  final String remoteUri;
+
+  @override
+  State<_BlindTransferDialog> createState() =>
+      _BlindTransferDialogState();
+}
+
+class _BlindTransferDialogState extends State<_BlindTransferDialog> {
+  final destinationController = TextEditingController();
+  String? errorText;
+
+  void _submit() {
+    final destination = destinationController.text.trim();
+    if (destination.isEmpty) {
+      setState(() => errorText = '请输入转接号码');
+      return;
+    }
+    Navigator.of(context).pop(destination);
+  }
+
+  @override
+  void dispose() {
+    destinationController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.phone_forwarded, size: 21),
+          SizedBox(width: 9),
+          Text('盲转通话'),
+        ],
+      ),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              widget.remoteUri,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Color(0xff52635f)),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: destinationController,
+              autofocus: true,
+              textInputAction: TextInputAction.done,
+              decoration: InputDecoration(
+                labelText: '转接号码或 SIP URI',
+                hintText: '例如 6522',
+                errorText: errorText,
+                prefixIcon: const Icon(Icons.dialpad),
+              ),
+              onChanged: (_) {
+                if (errorText != null) setState(() => errorText = null);
+              },
+              onSubmitted: (_) => _submit(),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              '提交后将直接发送转接请求，不会先呼叫目标号码。',
+              style: TextStyle(fontSize: 12, color: Color(0xff6b7572)),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton.icon(
+          onPressed: _submit,
+          icon: const Icon(Icons.phone_forwarded),
+          label: const Text('确认转接'),
         ),
       ],
     );

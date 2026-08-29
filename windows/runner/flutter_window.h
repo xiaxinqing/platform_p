@@ -13,6 +13,8 @@
 #include "../../native/pjsip_service.h"
 #include "win32_window.h"
 
+class WindowsAudioDeviceMonitor;
+
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
  public:
@@ -29,6 +31,7 @@ class FlutterWindow : public Win32Window {
 
  private:
   void ConfigurePjsipChannel();
+  void HandleAudioDeviceChange();
   void EnqueuePjsipEvent(const platform_p::PjsipEvent& event);
   void FlushPjsipEvents();
 
@@ -40,6 +43,7 @@ class FlutterWindow : public Win32Window {
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       pjsip_channel_;
   std::unique_ptr<platform_p::PjsipService> pjsip_service_;
+  WindowsAudioDeviceMonitor* audio_device_monitor_ = nullptr;
   std::mutex pjsip_event_mutex_;
   std::vector<platform_p::PjsipEvent> pending_pjsip_events_;
 };

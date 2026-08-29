@@ -6,6 +6,7 @@ import 'pjsip_account_panel.dart';
 import 'pjsip_call_panel.dart';
 import 'pjsip_debug_account.dart';
 import 'pjsip_native_bridge.dart';
+import 'pjsip_network_monitor.dart';
 
 void main() => runApp(const PlatformPApp());
 
@@ -36,6 +37,7 @@ class PjsipConsolePage extends StatefulWidget {
 
 class _PjsipConsolePageState extends State<PjsipConsolePage> {
   final bridge = PjsipNativeBridge.instance;
+  late final PjsipNetworkMonitor networkMonitor;
   final logs = <String>[];
   StreamSubscription<PjsipStatusEvent>? statusSubscription;
   StreamSubscription<PjsipLogEvent>? logSubscription;
@@ -46,9 +48,18 @@ class _PjsipConsolePageState extends State<PjsipConsolePage> {
   @override
   void initState() {
     super.initState();
+    networkMonitor = PjsipNetworkMonitor(
+      bridge: bridge,
+      onMessage: _onNetworkMessage,
+    );
     statusSubscription = bridge.statusStream.listen(_onStatus);
     logSubscription = bridge.logStream.listen(_onLog);
+    unawaited(networkMonitor.start());
     unawaited(_initialize());
+  }
+
+  void _onNetworkMessage(String message) {
+    if (mounted) setState(() => summary = message);
   }
 
   Future<void> _initialize() async {
@@ -113,6 +124,7 @@ class _PjsipConsolePageState extends State<PjsipConsolePage> {
 
   @override
   void dispose() {
+    networkMonitor.dispose();
     statusSubscription?.cancel();
     logSubscription?.cancel();
     super.dispose();

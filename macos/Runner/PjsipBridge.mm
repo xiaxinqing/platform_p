@@ -91,6 +91,44 @@ AudioObjectID DefaultAudioDevice(AudioObjectPropertySelector selector) {
   return status == noErr ? device : kAudioObjectUnknown;
 }
 
+NSString* AudioDeviceName(AudioObjectID device) {
+  if (device == kAudioObjectUnknown) {
+    return @"未检测到设备";
+  }
+  AudioObjectPropertyAddress address = {
+      kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal,
+      kAudioObjectPropertyElementMain};
+  CFStringRef name = nullptr;
+  UInt32 size = sizeof(name);
+  const OSStatus status = AudioObjectGetPropertyData(
+      device, &address, 0, nullptr, &size, &name);
+  if (status != noErr || name == nullptr) {
+    return @"未知设备";
+  }
+  NSString* result = [(__bridge NSString*)name copy];
+  CFRelease(name);
+  return result;
+}
+
+NSDictionary* AudioDeviceStateDictionary(NSString* state,
+                                         NSString* message) {
+  return @{
+    @"type" : @"audioDevice",
+    @"state" : state,
+    @"message" : message,
+    @"captureDevice" : AudioDeviceName(g_default_input_device),
+    @"playbackDevice" : AudioDeviceName(g_default_output_device),
+  };
+}
+
+void EmitAudioDeviceState(NSString* state, NSString* message) {
+  if (g_channel == nil) {
+    return;
+  }
+  [g_channel invokeMethod:@"event"
+                arguments:AudioDeviceStateDictionary(state, message)];
+}
+
 void ScheduleSystemAudioDeviceRefresh() {
   dispatch_async(dispatch_get_main_queue(), ^{
     if (!g_audio_device_monitoring) {
@@ -112,7 +150,9 @@ void ScheduleSystemAudioDeviceRefresh() {
       }
       g_default_input_device = input_device;
       g_default_output_device = output_device;
+      EmitAudioDeviceState(@"switching", @"正在跟随系统切换音频设备");
       if (!g_service) {
+        EmitAudioDeviceState(@"ready", @"音频设备跟随系统设置");
         return;
       }
       const platform_p::PjsipResult refresh_result =
@@ -120,6 +160,10 @@ void ScheduleSystemAudioDeviceRefresh() {
       if (!refresh_result.success) {
         NSLog(@"[PJSIP] Audio device refresh failed: %s",
               refresh_result.message.c_str());
+        EmitAudioDeviceState(@"error",
+                             NativeString(refresh_result.message));
+      } else {
+        EmitAudioDeviceState(@"ready", @"音频设备已跟随系统切换");
       }
     });
     dispatch_after(
@@ -305,6 +349,20 @@ void RegisterPjsipBridge(id<FlutterBinaryMessenger> messenger) {
           ArgumentString(arguments, @"digits"))));
       return;
     }
+    if ([call.method isEqualToString:@"transferCall"]) {
+      NSDictionary* arguments =
+          [call.arguments isKindOfClass:[NSDictionary class]]
+              ? static_cast<NSDictionary*>(call.arguments)
+              : @{};
+      result(ResultDictionary(g_service->TransferCall(
+          ArgumentInt(arguments, @"callId"),
+          ArgumentString(arguments, @"destination"))));
+      return;
+    }
+    if ([call.method isEqualToString:@"handleNetworkChange"]) {
+      result(ResultDictionary(g_service->HandleNetworkChange()));
+      return;
+    }
     if ([call.method isEqualToString:@"getAudioLevels"]) {
       NSDictionary* arguments =
           [call.arguments isKindOfClass:[NSDictionary class]]
@@ -340,6 +398,11 @@ void RegisterPjsipBridge(id<FlutterBinaryMessenger> messenger) {
           ArgumentString(arguments, @"ringtonePath"),
           ArgumentString(arguments, @"ringbackPath"),
           ArgumentString(arguments, @"hangupPath"))));
+      return;
+    }
+    if ([call.method isEqualToString:@"getAudioDeviceState"]) {
+      result(AudioDeviceStateDictionary(@"ready",
+                                        @"音频设备跟随系统设置"));
       return;
     }
     if ([call.method isEqualToString:@"shutdown"]) {

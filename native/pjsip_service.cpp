@@ -523,6 +523,70 @@ PjsipResult PjsipService::ResumeCall(int call_id) {
           call_id};
 }
 
+PjsipResult PjsipService::TransferCall(int call_id,
+                                       const std::string& destination) {
+  std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+  if (!initialized_ || !pjsua_call_is_active(call_id) ||
+      destination.empty()) {
+    return {false, "started", PJ_EINVAL,
+            "Active call and transfer destination required", -1, call_id};
+  }
+
+  pjsua_call_info call_info;
+  const pj_status_t info_status = pjsua_call_get_info(call_id, &call_info);
+  if (info_status != PJ_SUCCESS) {
+    return {false, "started", info_status,
+            "Unable to read call account: " +
+                StatusDescription(info_status),
+            -1, call_id};
+  }
+
+  std::string uri = destination;
+  if (uri.rfind("sip:", 0) != 0 && uri.rfind("sips:", 0) != 0) {
+    if (uri.find('@') == std::string::npos) {
+      const auto account = accounts_.find(call_info.acc_id);
+      if (account == accounts_.end()) {
+        return {false, "started", PJ_EINVALIDOP,
+                "Call account is no longer available", -1, call_id};
+      }
+      uri += "@" + account->second.host;
+    }
+    uri = "sip:" + uri;
+  }
+
+  pj_str_t destination_uri = StringRef(uri);
+  const pj_status_t status =
+      pjsua_call_xfer(call_id, &destination_uri, nullptr);
+  if (status != PJ_SUCCESS) {
+    return {false, "started", status,
+            "Call transfer failed: " + StatusDescription(status), -1,
+            call_id};
+  }
+  EmitLog(3, "Blind transfer requested: call=" + std::to_string(call_id) +
+                 ", destination=" + uri);
+  return {true, "started", PJ_SUCCESS, "Blind transfer request sent", -1,
+          call_id};
+}
+
+PjsipResult PjsipService::HandleNetworkChange() {
+  std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+  if (!initialized_) {
+    return {false, "idle", PJ_EINVALIDOP, "PJSIP engine is not started"};
+  }
+
+  pjsua_ip_change_param parameter;
+  pjsua_ip_change_param_default(&parameter);
+  const pj_status_t status = pjsua_handle_ip_change(&parameter);
+  if (status != PJ_SUCCESS) {
+    return {false, "started", status,
+            "Network recovery failed: " + StatusDescription(status)};
+  }
+  EmitLog(3, "Network change detected; PJSIP recovery started");
+  EmitStatus("started", "Network changed, refreshing SIP registrations");
+  return {true, "started", PJ_SUCCESS,
+          "Network recovery and SIP re-registration started"};
+}
+
 PjsipResult PjsipService::SetMicrophoneMuted(bool muted) {
   std::lock_guard<std::mutex> lock(lifecycle_mutex_);
   if (!initialized_) {

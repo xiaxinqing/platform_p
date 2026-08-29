@@ -22,6 +22,10 @@ FlValue* pjsip_result_value(const platform_p::PjsipResult& result) {
                            fl_value_new_int(result.status));
   fl_value_set_string_take(value, "message",
                            fl_value_new_string(result.message.c_str()));
+  fl_value_set_string_take(value, "accountId",
+                           fl_value_new_int(result.account_id));
+  fl_value_set_string_take(value, "callId",
+                           fl_value_new_int(result.call_id));
   return value;
 }
 
@@ -35,7 +39,70 @@ FlValue* pjsip_event_value(const platform_p::PjsipEvent& event) {
                            fl_value_new_int(event.level));
   fl_value_set_string_take(value, "message",
                            fl_value_new_string(event.message.c_str()));
+  fl_value_set_string_take(value, "accountId",
+                           fl_value_new_int(event.account_id));
+  fl_value_set_string_take(value, "status",
+                           fl_value_new_int(event.status));
+  fl_value_set_string_take(value, "expires",
+                           fl_value_new_int(event.expires));
+  fl_value_set_string_take(value, "registered",
+                           fl_value_new_bool(event.registered));
+  fl_value_set_string_take(value, "callId",
+                           fl_value_new_int(event.call_id));
+  fl_value_set_string_take(value, "callState",
+                           fl_value_new_int(event.call_state));
+  fl_value_set_string_take(value, "mediaStatus",
+                           fl_value_new_int(event.media_status));
+  fl_value_set_string_take(value, "lastStatus",
+                           fl_value_new_int(event.last_status));
+  fl_value_set_string_take(value, "incoming",
+                           fl_value_new_bool(event.incoming));
+  fl_value_set_string_take(value, "remoteUri",
+                           fl_value_new_string(event.remote_uri.c_str()));
+  fl_value_set_string_take(value, "accountUri",
+                           fl_value_new_string(event.account_uri.c_str()));
+  fl_value_set_string_take(value, "captureDevice",
+                           fl_value_new_string(event.capture_device.c_str()));
+  fl_value_set_string_take(value, "playbackDevice",
+                           fl_value_new_string(event.playback_device.c_str()));
   return value;
+}
+
+FlValue* argument_value(FlValue* arguments, const gchar* key) {
+  if (arguments == nullptr ||
+      fl_value_get_type(arguments) != FL_VALUE_TYPE_MAP) {
+    return nullptr;
+  }
+  return fl_value_lookup_string(arguments, key);
+}
+
+std::string argument_string(FlValue* arguments, const gchar* key) {
+  FlValue* value = argument_value(arguments, key);
+  return value != nullptr && fl_value_get_type(value) == FL_VALUE_TYPE_STRING
+             ? fl_value_get_string(value)
+             : std::string();
+}
+
+int argument_int(FlValue* arguments, const gchar* key, int fallback = -1) {
+  FlValue* value = argument_value(arguments, key);
+  return value != nullptr && fl_value_get_type(value) == FL_VALUE_TYPE_INT
+             ? static_cast<int>(fl_value_get_int(value))
+             : fallback;
+}
+
+bool argument_bool(FlValue* arguments, const gchar* key,
+                   bool fallback = false) {
+  FlValue* value = argument_value(arguments, key);
+  return value != nullptr && fl_value_get_type(value) == FL_VALUE_TYPE_BOOL
+             ? fl_value_get_bool(value)
+             : fallback;
+}
+
+void respond_success(FlMethodCall* method_call, FlValue* value) {
+  g_autoptr(FlValue) owned_value = value;
+  g_autoptr(FlMethodResponse) response =
+      FL_METHOD_RESPONSE(fl_method_success_response_new(owned_value));
+  fl_method_call_respond(method_call, response, nullptr);
 }
 
 struct PjsipNotification {
@@ -70,6 +137,8 @@ struct _MyApplication {
   char** dart_entrypoint_arguments;
   FlMethodChannel* pjsip_channel;
   platform_p::PjsipService* pjsip_service;
+  GFileMonitor* audio_device_monitor;
+  guint audio_device_refresh_source;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -79,17 +148,139 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
 }
 
+static gboolean refresh_linux_audio_devices(gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  self->audio_device_refresh_source = 0;
+  if (self->pjsip_service == nullptr || self->pjsip_channel == nullptr) {
+    return G_SOURCE_REMOVE;
+  }
+  const platform_p::PjsipResult result =
+      self->pjsip_service->RefreshSystemAudioDevices();
+  platform_p::PjsipEvent event;
+  event.type = "audioDevice";
+  event.state = result.success ? "ready" : "error";
+  event.message = result.message;
+  event.capture_device = "Linux system default input";
+  event.playback_device = "Linux system default output";
+  notify_pjsip_event(self->pjsip_channel, event);
+  return G_SOURCE_REMOVE;
+}
+
+static void linux_audio_device_changed(GFileMonitor*, GFile*, GFile*,
+                                       GFileMonitorEvent, gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  if (self->audio_device_refresh_source != 0) {
+    g_source_remove(self->audio_device_refresh_source);
+  }
+  self->audio_device_refresh_source =
+      g_timeout_add(300, refresh_linux_audio_devices, self);
+}
+
 static void pjsip_method_call_cb(FlMethodChannel*,
                                  FlMethodCall* method_call,
                                  gpointer user_data) {
   MyApplication* self = MY_APPLICATION(user_data);
   const gchar* method = fl_method_call_get_name(method_call);
+  FlValue* arguments = fl_method_call_get_args(method_call);
   platform_p::PjsipResult result;
 
   if (g_strcmp0(method, "initialize") == 0) {
     result = self->pjsip_service->Initialize();
   } else if (g_strcmp0(method, "status") == 0) {
     result = self->pjsip_service->GetStatus();
+  } else if (g_strcmp0(method, "registerAccount") == 0) {
+    platform_p::PjsipAccountConfig config;
+    config.username = argument_string(arguments, "username");
+    config.auth_username = argument_string(arguments, "authUsername");
+    config.password = argument_string(arguments, "password");
+    config.host = argument_string(arguments, "host");
+    config.transport = argument_string(arguments, "transport");
+    config.port = argument_int(arguments, "port", 0);
+    config.media_security = argument_string(arguments, "mediaSecurity");
+    config.stun_enabled = argument_bool(arguments, "stunEnabled");
+    config.stun_server = argument_string(arguments, "stunServer");
+    config.stun_port = argument_int(arguments, "stunPort", 3478);
+    config.ice_enabled = argument_bool(arguments, "iceEnabled");
+    config.tls_verify_server = argument_bool(arguments, "tlsVerifyServer");
+    if (config.transport.empty()) {
+      config.transport = "udp";
+    }
+    if (config.media_security.empty()) {
+      config.media_security = "none";
+    }
+    result = self->pjsip_service->RegisterAccount(config);
+  } else if (g_strcmp0(method, "unregisterAccount") == 0) {
+    result = self->pjsip_service->UnregisterAccount(
+        argument_int(arguments, "accountId"));
+  } else if (g_strcmp0(method, "makeCall") == 0) {
+    result = self->pjsip_service->MakeCall(
+        argument_string(arguments, "destination"),
+        argument_int(arguments, "accountId"));
+  } else if (g_strcmp0(method, "answerCall") == 0) {
+    result = self->pjsip_service->AnswerCall(
+        argument_int(arguments, "callId"));
+  } else if (g_strcmp0(method, "rejectCall") == 0) {
+    result = self->pjsip_service->RejectCall(
+        argument_int(arguments, "callId"));
+  } else if (g_strcmp0(method, "hangupCall") == 0) {
+    result = self->pjsip_service->HangupCall(
+        argument_int(arguments, "callId"));
+  } else if (g_strcmp0(method, "holdCall") == 0) {
+    result = self->pjsip_service->HoldCall(
+        argument_int(arguments, "callId"));
+  } else if (g_strcmp0(method, "resumeCall") == 0) {
+    result = self->pjsip_service->ResumeCall(
+        argument_int(arguments, "callId"));
+  } else if (g_strcmp0(method, "setMicrophoneMuted") == 0) {
+    result = self->pjsip_service->SetMicrophoneMuted(
+        argument_bool(arguments, "muted"));
+  } else if (g_strcmp0(method, "setSpeakerMuted") == 0) {
+    result = self->pjsip_service->SetSpeakerMuted(
+        argument_bool(arguments, "muted"));
+  } else if (g_strcmp0(method, "sendDtmf") == 0) {
+    result = self->pjsip_service->SendDtmf(
+        argument_int(arguments, "callId"),
+        argument_string(arguments, "digits"));
+  } else if (g_strcmp0(method, "transferCall") == 0) {
+    result = self->pjsip_service->TransferCall(
+        argument_int(arguments, "callId"),
+        argument_string(arguments, "destination"));
+  } else if (g_strcmp0(method, "getAudioLevels") == 0) {
+    unsigned microphone_level = 0;
+    unsigned remote_level = 0;
+    result = self->pjsip_service->GetAudioLevels(
+        argument_int(arguments, "callId"), &microphone_level,
+        &remote_level);
+    FlValue* value = pjsip_result_value(result);
+    fl_value_set_string_take(value, "microphoneLevel",
+                             fl_value_new_int(microphone_level));
+    fl_value_set_string_take(value, "remoteLevel",
+                             fl_value_new_int(remote_level));
+    respond_success(method_call, value);
+    return;
+  } else if (g_strcmp0(method, "setAutoHoldOnIncoming") == 0) {
+    result = self->pjsip_service->SetAutoHoldOnIncoming(
+        argument_bool(arguments, "enabled"));
+  } else if (g_strcmp0(method, "configureAudioCues") == 0) {
+    result = self->pjsip_service->ConfigureAudioCues(
+        argument_string(arguments, "ringtonePath"),
+        argument_string(arguments, "ringbackPath"),
+        argument_string(arguments, "hangupPath"));
+  } else if (g_strcmp0(method, "handleNetworkChange") == 0) {
+    result = self->pjsip_service->HandleNetworkChange();
+  } else if (g_strcmp0(method, "getAudioDeviceState") == 0) {
+    FlValue* value = fl_value_new_map();
+    fl_value_set_string_take(value, "state", fl_value_new_string("ready"));
+    fl_value_set_string_take(value, "captureDevice",
+                             fl_value_new_string("Linux system default input"));
+    fl_value_set_string_take(
+        value, "playbackDevice",
+        fl_value_new_string("Linux system default output"));
+    fl_value_set_string_take(
+        value, "message",
+        fl_value_new_string("Audio devices follow Linux system settings"));
+    respond_success(method_call, value);
+    return;
   } else if (g_strcmp0(method, "shutdown") == 0) {
     result = self->pjsip_service->Shutdown();
   } else {
@@ -99,10 +290,7 @@ static void pjsip_method_call_cb(FlMethodChannel*,
     return;
   }
 
-  g_autoptr(FlValue) value = pjsip_result_value(result);
-  g_autoptr(FlMethodResponse) response =
-      FL_METHOD_RESPONSE(fl_method_success_response_new(value));
-  fl_method_call_respond(method_call, response, nullptr);
+  respond_success(method_call, pjsip_result_value(result));
 }
 
 // Implements GApplication::activate.
@@ -177,6 +365,15 @@ static void my_application_activate(GApplication* application) {
   fl_method_channel_set_method_call_handler(
       self->pjsip_channel, pjsip_method_call_cb, self, nullptr);
 
+  g_autoptr(GFile) sound_devices = g_file_new_for_path("/dev/snd");
+  self->audio_device_monitor =
+      g_file_monitor_directory(sound_devices, G_FILE_MONITOR_NONE, nullptr,
+                               nullptr);
+  if (self->audio_device_monitor != nullptr) {
+    g_signal_connect(self->audio_device_monitor, "changed",
+                     G_CALLBACK(linux_audio_device_changed), self);
+  }
+
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
 
@@ -223,6 +420,11 @@ static void my_application_shutdown(GApplication* application) {
 // Implements GObject::dispose.
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
+  if (self->audio_device_refresh_source != 0) {
+    g_source_remove(self->audio_device_refresh_source);
+    self->audio_device_refresh_source = 0;
+  }
+  g_clear_object(&self->audio_device_monitor);
   if (self->pjsip_service != nullptr) {
     self->pjsip_service->SetEventCallback(nullptr);
     delete self->pjsip_service;
