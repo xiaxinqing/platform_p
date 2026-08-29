@@ -2,8 +2,9 @@
 
 #include <flutter/standard_method_codec.h>
 
-#include <functiondiscoverykeys_devpkey.h>
 #include <mmdeviceapi.h>
+#include <propkeydef.h>
+#include <functiondiscoverykeys_devpkey.h>
 
 #include <atomic>
 #include <cstdint>
