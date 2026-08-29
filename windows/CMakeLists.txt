@@ -2,6 +2,13 @@
 cmake_minimum_required(VERSION 3.14)
 project(platform_p LANGUAGES CXX)
 
+# Build the runner and generated plugins as UTF-8. This avoids MSVC C4819 on
+# Windows installations whose active code page cannot represent plugin source
+# characters, while keeping warnings-as-errors enabled.
+if(MSVC)
+  add_compile_options(/utf-8)
+endif()
+
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
 set(BINARY_NAME "platform_p")
