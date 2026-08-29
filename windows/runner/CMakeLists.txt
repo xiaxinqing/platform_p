@@ -87,5 +87,15 @@ set(PLUGIN_BUNDLED_LIBRARIES
   PARENT_SCOPE
 )
 
+# flutter run launches directly from the runner build directory instead of the
+# installed bundle, so keep the OpenSSL runtime beside the executable there too.
+foreach(PJSIP_OPENSSL_DLL ${PJSIP_OPENSSL_DLLS})
+  add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${PJSIP_OPENSSL_DLL}"
+      "$<TARGET_FILE_DIR:${BINARY_NAME}>"
+  )
+endforeach()
+
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
