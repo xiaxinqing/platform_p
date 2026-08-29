@@ -45,6 +45,11 @@ NSDictionary* EventDictionary(const platform_p::PjsipEvent& event) {
     @"incoming" : @(event.incoming),
     @"remoteUri" : NativeString(event.remote_uri),
     @"accountUri" : NativeString(event.account_uri),
+    @"signalingTransport" : NativeString(event.signaling_transport),
+    @"mediaSecurity" : NativeString(event.media_security),
+    @"cryptoSuite" : NativeString(event.crypto_suite),
+    @"securityState" : NativeString(event.security_state),
+    @"mediaEncrypted" : @(event.media_encrypted),
   };
 }
 

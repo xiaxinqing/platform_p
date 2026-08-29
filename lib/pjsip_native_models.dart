@@ -207,6 +207,29 @@ enum PjsipCallState {
   }
 }
 
+enum PjsipMediaSecurityState {
+  negotiating,
+  secure,
+  insecure,
+  failed,
+  unknown;
+
+  static PjsipMediaSecurityState fromNative(Object? value) {
+    switch (value?.toString()) {
+      case 'negotiating':
+        return PjsipMediaSecurityState.negotiating;
+      case 'secure':
+        return PjsipMediaSecurityState.secure;
+      case 'insecure':
+        return PjsipMediaSecurityState.insecure;
+      case 'failed':
+        return PjsipMediaSecurityState.failed;
+      default:
+        return PjsipMediaSecurityState.unknown;
+    }
+  }
+}
+
 class PjsipCallEvent {
   const PjsipCallEvent({
     required this.callId,
@@ -218,6 +241,11 @@ class PjsipCallEvent {
     required this.incoming,
     required this.remoteUri,
     required this.message,
+    required this.signalingTransport,
+    required this.mediaSecurity,
+    required this.cryptoSuite,
+    required this.securityState,
+    required this.mediaEncrypted,
   });
 
   factory PjsipCallEvent.fromMap(Map<String, dynamic> map) {
@@ -236,6 +264,12 @@ class PjsipCallEvent {
       incoming: map['incoming'] == true,
       remoteUri: map['remoteUri']?.toString() ?? '',
       message: map['message']?.toString() ?? '',
+      signalingTransport: map['signalingTransport']?.toString() ?? '',
+      mediaSecurity: map['mediaSecurity']?.toString() ?? 'none',
+      cryptoSuite: map['cryptoSuite']?.toString() ?? '',
+      securityState:
+          PjsipMediaSecurityState.fromNative(map['securityState']),
+      mediaEncrypted: map['mediaEncrypted'] == true,
     );
   }
 
@@ -248,6 +282,11 @@ class PjsipCallEvent {
   final bool incoming;
   final String remoteUri;
   final String message;
+  final String signalingTransport;
+  final String mediaSecurity;
+  final String cryptoSuite;
+  final PjsipMediaSecurityState securityState;
+  final bool mediaEncrypted;
 
   bool get isActive =>
       state != PjsipCallState.idle &&

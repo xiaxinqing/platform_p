@@ -78,6 +78,16 @@ flutter::EncodableValue PjsipEventValue(
        flutter::EncodableValue(event.capture_device)},
       {flutter::EncodableValue("playbackDevice"),
        flutter::EncodableValue(event.playback_device)},
+      {flutter::EncodableValue("signalingTransport"),
+       flutter::EncodableValue(event.signaling_transport)},
+      {flutter::EncodableValue("mediaSecurity"),
+       flutter::EncodableValue(event.media_security)},
+      {flutter::EncodableValue("cryptoSuite"),
+       flutter::EncodableValue(event.crypto_suite)},
+      {flutter::EncodableValue("securityState"),
+       flutter::EncodableValue(event.security_state)},
+      {flutter::EncodableValue("mediaEncrypted"),
+       flutter::EncodableValue(event.media_encrypted)},
   };
 }
 

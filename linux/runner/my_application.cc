@@ -65,6 +65,17 @@ FlValue* pjsip_event_value(const platform_p::PjsipEvent& event) {
                            fl_value_new_string(event.capture_device.c_str()));
   fl_value_set_string_take(value, "playbackDevice",
                            fl_value_new_string(event.playback_device.c_str()));
+  fl_value_set_string_take(
+      value, "signalingTransport",
+      fl_value_new_string(event.signaling_transport.c_str()));
+  fl_value_set_string_take(value, "mediaSecurity",
+                           fl_value_new_string(event.media_security.c_str()));
+  fl_value_set_string_take(value, "cryptoSuite",
+                           fl_value_new_string(event.crypto_suite.c_str()));
+  fl_value_set_string_take(value, "securityState",
+                           fl_value_new_string(event.security_state.c_str()));
+  fl_value_set_string_take(value, "mediaEncrypted",
+                           fl_value_new_bool(event.media_encrypted));
   return value;
 }
 

@@ -1,6 +1,7 @@
 #include "pjsip_service.h"
 
 #include <pjsua-lib/pjsua.h>
+#include <pjmedia/transport_srtp.h>
 
 #include <cstdio>
 #include <algorithm>
@@ -1165,6 +1166,7 @@ void PjsipService::EmitCall(int call_id,
   event.media_status = static_cast<int>(info.media_status);
   event.last_status = info.last_status;
   event.incoming = incoming;
+  PopulateCallSecurity(&info, &event);
   if (info.remote_info.ptr != nullptr && info.remote_info.slen > 0) {
     event.remote_uri.assign(info.remote_info.ptr,
                             static_cast<size_t>(info.remote_info.slen));
@@ -1178,6 +1180,63 @@ void PjsipService::EmitCall(int call_id,
                          static_cast<size_t>(info.last_status_text.slen));
   }
   Emit(event);
+}
+
+void PjsipService::PopulateCallSecurity(const void* call_info,
+                                        PjsipEvent* event) const {
+  if (call_info == nullptr || event == nullptr) {
+    return;
+  }
+  const auto& info = *static_cast<const pjsua_call_info*>(call_info);
+  const auto account = accounts_.find(info.acc_id);
+  const std::string configured =
+      account == accounts_.end() ? "none" : account->second.media_security;
+  event->signaling_transport =
+      account == accounts_.end() ? "" : account->second.transport;
+  event->media_security = configured;
+  const bool encryption_expected = configured == "sdes" || configured == "dtls";
+  event->security_state = encryption_expected ? "negotiating" : "insecure";
+
+  if (info.media_status == PJSUA_CALL_MEDIA_ERROR) {
+    if (encryption_expected) {
+      event->security_state = "failed";
+    }
+    return;
+  }
+
+  for (unsigned index = 0; index < info.media_cnt; ++index) {
+    if (info.media[index].type != PJMEDIA_TYPE_AUDIO) {
+      continue;
+    }
+    pjmedia_transport_info transport_info;
+    pjmedia_transport_info_init(&transport_info);
+    if (pjsua_call_get_med_transport_info(info.id, index, &transport_info) !=
+        PJ_SUCCESS) {
+      break;
+    }
+    auto* srtp_info = static_cast<pjmedia_srtp_info*>(
+        pjmedia_transport_info_get_spc_info(
+            &transport_info, PJMEDIA_TRANSPORT_TYPE_SRTP));
+    if (srtp_info != nullptr && srtp_info->active) {
+      event->media_encrypted = true;
+      event->security_state = "secure";
+      if (event->media_security != "sdes" &&
+          event->media_security != "dtls") {
+        event->media_security = "srtp";
+      }
+      const pj_str_t& suite = srtp_info->tx_policy.name.slen > 0
+                                  ? srtp_info->tx_policy.name
+                                  : srtp_info->rx_policy.name;
+      if (suite.ptr != nullptr && suite.slen > 0) {
+        event->crypto_suite.assign(suite.ptr,
+                                   static_cast<size_t>(suite.slen));
+      }
+    } else if (info.media_status == PJSUA_CALL_MEDIA_ACTIVE) {
+      event->media_security = "none";
+      event->security_state = encryption_expected ? "failed" : "insecure";
+    }
+    break;
+  }
 }
 
 }  // namespace platform_p

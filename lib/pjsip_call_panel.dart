@@ -423,11 +423,20 @@ class _PjsipCallPanelState extends State<PjsipCallPanel> {
             ],
           ),
           const SizedBox(height: 6),
-          Text(
-            '${_stateLabel(call.state)} · 账号 ${call.accountId}'
-            '${call.isOnHold ? ' · 保持中' : ''}'
-            '${call.isConnected ? ' · ${_duration(call.callId)}' : ''}',
-            style: TextStyle(color: color),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  '${_stateLabel(call.state)} · 账号 ${call.accountId}'
+                  '${call.isOnHold ? ' · 保持中' : ''}'
+                  '${call.isConnected ? ' · ${_duration(call.callId)}' : ''}',
+                  style: TextStyle(color: color),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _CallSecurityBadge(call: call),
+            ],
           ),
           if (call.isConnected && !call.isOnHold) ...[
             const SizedBox(height: 10),
@@ -592,6 +601,77 @@ class _PjsipCallPanelState extends State<PjsipCallPanel> {
     final minutes = elapsed.inMinutes.remainder(60).toString().padLeft(2, '0');
     final seconds = elapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
     return hours > 0 ? '$hours:$minutes:$seconds' : '$minutes:$seconds';
+  }
+}
+
+class _CallSecurityBadge extends StatelessWidget {
+  const _CallSecurityBadge({required this.call});
+
+  final PjsipCallEvent call;
+
+  @override
+  Widget build(BuildContext context) {
+    late final IconData icon;
+    late final Color color;
+    late final String label;
+    switch (call.securityState) {
+      case PjsipMediaSecurityState.secure:
+        icon = Icons.lock;
+        color = const Color(0xff007a5e);
+        label = switch (call.mediaSecurity) {
+          'dtls' => 'DTLS-SRTP',
+          'sdes' => 'SDES-SRTP',
+          _ => 'SRTP',
+        };
+      case PjsipMediaSecurityState.negotiating:
+        icon = Icons.lock_outline;
+        color = const Color(0xff9a6700);
+        label = '加密协商中';
+      case PjsipMediaSecurityState.failed:
+        icon = Icons.lock_open;
+        color = const Color(0xffb42318);
+        label = '加密失败';
+      case PjsipMediaSecurityState.insecure:
+        icon = Icons.lock_open;
+        color = const Color(0xff52635f);
+        label = '普通 RTP';
+      case PjsipMediaSecurityState.unknown:
+        icon = Icons.lock_outline;
+        color = const Color(0xff52635f);
+        label = '检测中';
+    }
+    final signaling = call.signalingTransport.isEmpty
+        ? '未知'
+        : call.signalingTransport.toUpperCase();
+    final suite = call.cryptoSuite.isEmpty
+        ? ''
+        : '\n加密套件：${call.cryptoSuite}';
+    return Tooltip(
+      message: '信令：$signaling\n媒体：$label$suite',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.09),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withValues(alpha: 0.32)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: color),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

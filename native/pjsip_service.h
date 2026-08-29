@@ -32,6 +32,11 @@ struct PjsipEvent {
   std::string account_uri;
   std::string capture_device;
   std::string playback_device;
+  std::string signaling_transport;
+  std::string media_security;
+  std::string crypto_suite;
+  std::string security_state;
+  bool media_encrypted = false;
 };
 
 struct PjsipResult {
@@ -118,6 +123,7 @@ class PjsipService {
   void ConfigureCodecs();
   void HoldOtherConfirmedCalls(int except_call_id);
   void ConnectCallAudio(int call_id, bool connect);
+  void PopulateCallSecurity(const void* call_info, PjsipEvent* event) const;
   void RefreshAudioCues();
   void HandleCallAudioCueState(int call_id, int call_state);
   void StartAudioCueLocked(const std::string& path,
